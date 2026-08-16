@@ -3,7 +3,7 @@
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
 import { useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById, allEntities, dispCtx } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -21,7 +21,7 @@ import { initAutomations } from "@/lib/automations";
 import { AutomationsLive } from "@/components/live/AutomationsLive";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Rec } from "@/lib/model";
-import { DAY } from "@/lib/model";
+import { DAY, now, fmtMoney, relTime, plural, displayValue } from "@/lib/model";
 import {
   Bell, Calendar, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks,
@@ -117,7 +117,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.2</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.3</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -228,7 +228,7 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.2 · живое: всё, кроме Дашборда — автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.3 · живое: всё, кроме Дашборда — автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -354,66 +354,148 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
 }
 
 function Dashboard() {
-  const funnel = [["Новая", 100, "14"], ["Квалификация", 74, "10"], ["КП отправлено", 51, "7"], ["Переговоры", 38, "5"], ["Оплачено", 21, "3"]] as const;
-  const bars = [["Рекомендации", 86, "5"], ["Сайт", 64, "4"], ["Telegram", 47, "3"], ["Конференции", 21, "1"]] as const;
+  useApp(); // живая подписка на стор
+  const s = getState();
+  const pipelines = allEntities().filter(e => (e.stages?.length ?? 0) > 0);
+  const primary = pipelines[0];
+  const recs = primary ? s.records.filter(r => r.entityId === primary.id) : [];
+
+  // Нет воронки или совсем нет записей — честное пустое состояние вместо выдуманных цифр.
+  if (!primary || recs.length === 0) {
+    return (
+      <div className="cascade mx-auto max-w-4xl px-5 py-6">
+        <ScreenHead title="Дашборд" sub="Сводка соберётся сама, как только появятся записи" />
+        <div className="mt-8 grid place-items-center rounded-lg border border-dashed px-6 py-16 text-center">
+          <LayoutDashboard className="size-7 text-muted-foreground/50" />
+          <div className="mt-3 text-[14px] font-medium">
+            {primary ? `Пока нет записей в разделе «${primary.namePlural}»` : "Пока нет ни одной воронки"}
+          </div>
+          <p className="mt-1 max-w-sm text-[12.5px] text-muted-foreground">
+            {primary
+              ? "Дашборд посчитает воронку, суммы и источники автоматически — по вашим настоящим данным, без выдуманных цифр."
+              : "Создайте раздел с этапами (воронку) — и здесь появится живая сводка."}
+          </p>
+          {primary && (
+            <button
+              onClick={() => { const id = A.createRecord(primary.id, {}); A.openRecord(id); }}
+              className="press mt-4 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[12.5px] font-medium text-primary-foreground transition-opacity hover:opacity-90">
+              <Plus className="size-3.5" /> {primary.name}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const stages = primary.stages!;
+  const kindOf = (id?: string) => stages.find(x => x.id === id)?.kind;
+  const openRecs = recs.filter(r => kindOf(r.stageId) === "open");
+  const wonRecs = recs.filter(r => kindOf(r.stageId) === "won");
+  const lostRecs = recs.filter(r => kindOf(r.stageId) === "lost");
+  const moneyF = primary.fields.find(f => f.type === "money");
+  const sumOf = (arr: Rec[]) => moneyF ? arr.reduce((n, r) => n + (Number(r.values[moneyF.id]) || 0), 0) : 0;
+  const newWeek = recs.filter(r => r.createdAt >= now() - 7 * DAY).length;
+  const wonMonth = wonRecs.filter(r => (r.stageAt ?? r.updatedAt) >= now() - 30 * DAY);
+  const closed = wonRecs.length + lostRecs.length;
+  const conv = closed ? Math.round((wonRecs.length / closed) * 100) : 0;
+  const pl = primary.namePlural.toLowerCase();
+
+  const cards: [string, string, string][] = moneyF
+    ? [
+        ["В работе", fmtMoney(sumOf(openRecs)) || "0 ₽", `${openRecs.length} ${plural(openRecs.length, "открыта", "открыты", "открыто")}`],
+        ["Выиграно за месяц", fmtMoney(sumOf(wonMonth)) || "0 ₽", `${wonMonth.length} ${plural(wonMonth.length, "сделка", "сделки", "сделок")}`],
+        ["Новых за неделю", String(newWeek), pl],
+        ["Конверсия", closed ? conv + "%" : "—", closed ? `${wonRecs.length} из ${closed} закрытых` : "нет закрытых"],
+      ]
+    : [
+        ["Открытых", String(openRecs.length), pl],
+        ["Выиграно", String(wonRecs.length), `из ${recs.length} всего`],
+        ["Новых за неделю", String(newWeek), pl],
+        ["Конверсия", closed ? conv + "%" : "—", closed ? `${wonRecs.length} из ${closed}` : "нет закрытых"],
+      ];
+
+  const stageCount = (id: string) => recs.filter(r => r.stageId === id).length;
+  const maxStage = Math.max(1, ...stages.map(st => stageCount(st.id)));
+
+  // Источники — по полю «Источник», если он есть в разделе.
+  const srcF = primary.fields.find(f => f.id === "source" || /источник/i.test(f.label));
+  let sources: [string, number][] = [];
+  if (srcF) {
+    const m = new Map<string, number>();
+    for (const r of recs) {
+      const label = displayValue(srcF, r.values[srcF.id], dispCtx()).trim();
+      if (label) m.set(label, (m.get(label) ?? 0) + 1);
+    }
+    sources = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }
+  const maxSrc = Math.max(1, ...sources.map(([, n]) => n));
+
+  const events = [...s.activities].sort((a, b) => b.ts - a.ts).slice(0, 7);
+
   return (
     <div className="cascade mx-auto max-w-4xl px-5 py-6">
-      <ScreenHead title="Дашборд" sub="живые метрики появятся после подключения данных">
-        <div className="relative">
-          <Sparkles className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2" style={{ color: "var(--brass-ink)" }} />
-          <input readOnly placeholder="Спроси CRM…" title="В обёртке активна только навигация"
-            className="h-8 w-48 cursor-default rounded-md border bg-card pl-8 pr-3 text-[12px] outline-none placeholder:text-muted-foreground/70" />
-        </div>
-        <Idle><Plus className="size-3" /> Виджет</Idle>
-      </ScreenHead>
+      <ScreenHead title="Дашборд" sub={`Живая сводка по разделу «${primary.namePlural}»`} />
 
       <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 border-y py-4 md:grid-cols-4 md:divide-x">
-        {[["В работе, сумма", "3 659 000 ₽", "+12,4% к июлю"], ["План месяца", "47,2%", "1 415 000 из 3 000 000 ₽"], ["Новых за неделю", "11", "6 — из Telegram"], ["Конверсия в оплату", "21,3%", "медиана цикла — 19 дней"]].map(([l, v, s], i) => (
+        {cards.map(([l, v, sub], i) => (
           <div key={l} className={cn("md:px-5", i === 0 && "md:pl-0")}>
             <div className="eyebrow">{l}</div>
             <div className="font-mono2 tnum mt-1.5 text-[22px] font-medium leading-none tracking-tight">{v}</div>
-            <div className="mt-1.5 text-[11px] text-muted-foreground">{s}</div>
+            <div className="mt-1.5 text-[11px] text-muted-foreground">{sub}</div>
           </div>
         ))}
       </div>
 
       <div className="mt-6 grid gap-8 md:grid-cols-2">
         <div>
-          <div className="eyebrow">Воронка продаж</div>
+          <div className="eyebrow">Воронка · {primary.namePlural}</div>
           <div className="mt-3 flex flex-col gap-1.5">
-            {funnel.map(([l, w, n]) => (
-              <div key={l} className="flex items-center gap-2.5">
-                <span className="w-28 truncate text-[11.5px] text-muted-foreground">{l}</span>
-                <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
-                  <div className="flex h-full items-center rounded-[3px] pl-1.5" style={{ width: w + "%", background: `hsl(var(--brass) / ${0.35 + w / 180})` }}>
-                    <span className="font-mono2 text-[9.5px] font-medium text-foreground/80">{n}</span>
+            {stages.map(stage => {
+              const n = stageCount(stage.id);
+              const w = Math.round((n / maxStage) * 100);
+              return (
+                <div key={stage.id} className="flex items-center gap-2.5">
+                  <span className="w-28 truncate text-[11.5px] text-muted-foreground" title={stage.label}>{stage.label}</span>
+                  <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
+                    <div className="h-full rounded-[3px]" style={{ width: (n ? Math.max(6, w) : 0) + "%", background: stage.color + "d9" }} />
                   </div>
+                  <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
+
         <div>
-          <div className="eyebrow">Сделки по источникам</div>
-          <div className="mt-3 flex flex-col gap-1.5">
-            {bars.map(([l, w, n], i) => (
-              <div key={l} className="flex items-center gap-2.5">
-                <span className="w-28 truncate text-[11.5px] text-muted-foreground">{l}</span>
-                <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
-                  <div className="h-full rounded-[3px]" style={{ width: w + "%", background: i === 0 ? "hsl(var(--primary) / 0.75)" : "hsl(42 22% 72%)" }} />
-                </div>
-                <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
+          {sources.length > 0 && (
+            <>
+              <div className="eyebrow">Источники</div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                {sources.map(([l, n], i) => (
+                  <div key={l} className="flex items-center gap-2.5">
+                    <span className="w-28 truncate text-[11.5px] text-muted-foreground" title={l}>{l}</span>
+                    <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
+                      <div className="h-full rounded-[3px]" style={{ width: Math.max(6, Math.round((n / maxSrc) * 100)) + "%", background: i === 0 ? "hsl(var(--primary) / 0.75)" : "hsl(42 22% 72%)" }} />
+                    </div>
+                    <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="eyebrow mt-6">Последние события</div>
+            </>
+          )}
+          <div className={cn("eyebrow", sources.length > 0 && "mt-6")}>Последние события</div>
           <div className="mt-2.5 flex flex-col gap-2">
-            {[["12:47", "Ответ клиенту в Telegram — Максим Веретенников"], ["11:20", "Стадия «Переговоры» — Портал для «СтройТех»"], ["09:05", "Автоматизация: задача «Связаться за час»"]].map(([t, e]) => (
-              <div key={e} className="flex items-baseline gap-2.5 text-[12px]">
-                <span className="font-mono2 shrink-0 text-[10.5px] text-muted-foreground">{t}</span>
-                <span className="truncate">{e}</span>
-              </div>
-            ))}
+            {events.length === 0 && <div className="text-[12px] text-muted-foreground">Пока пусто — события появятся с активностью в разделах.</div>}
+            {events.map(a => {
+              const rec = recById(a.recordId);
+              return (
+                <div key={a.id} className="flex items-baseline gap-2.5 text-[12px]">
+                  <span className="font-mono2 shrink-0 text-[10.5px] text-muted-foreground">{relTime(a.ts)}</span>
+                  <span className="min-w-0 flex-1 truncate" title={a.text}>{a.text}</span>
+                  {rec && <span className="max-w-[110px] shrink-0 truncate text-[10.5px] text-muted-foreground/70">{recTitle(a.recordId)}</span>}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
