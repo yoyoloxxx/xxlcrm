@@ -32,7 +32,23 @@ const persistence = {
   reset() { try { window.localStorage.removeItem(LS_KEY); } catch { /* ignore */ } },
 };
 
+// миграция: раздать ручные позиции записям, у которых их ещё нет (сохраняя видимый порядок)
+function ensurePos(records: Rec[]) {
+  const groups = new Map<string, Rec[]>();
+  for (const r of records) {
+    const k = r.entityId + "|" + (r.stageId ?? "");
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  for (const g of groups.values()) {
+    if (g.every(r => typeof r.pos === "number")) continue;
+    g.sort((a, b) => (b.stageAt ?? b.createdAt) - (a.stageAt ?? a.createdAt));
+    g.forEach((r, i) => { r.pos = (i + 1) * 1000; });
+  }
+}
+
 const initial = persistence.load() ?? seed();
+ensurePos(initial.records);
 const st: State = { ...initial, currentUserId: "u1", drawerRecordId: null };
 
 let version = 0;
@@ -111,22 +127,47 @@ export const A = {
     });
   },
   moveStage(recId: string, stageId: string) {
+    const r = recById(recId);
+    if (!r || r.stageId === stageId) return;
+    A.moveStageAt(recId, stageId, null);
+  },
+  // Точное перемещение: карточка встаёт ПЕРЕД beforeId (null = в конец колонки)
+  moveStageAt(recId: string, stageId: string, beforeId: string | null) {
     pushHistory();
     mut(s => {
-      const r = recById(recId)!; if (r.stageId === stageId) return;
+      const r = recById(recId)!;
       const stage = entityCfg(r.entityId).stages?.find(x => x.id === stageId); if (!stage) return;
-      r.stageId = stageId; r.stageAt = now(); r.updatedAt = now();
-      pushAct(recId, "stage", `Стадия: ${stage.label}`, s.currentUserId);
+      const col = s.records
+        .filter(x => x.entityId === r.entityId && x.stageId === stageId && x.id !== recId)
+        .sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+      let pos: number;
+      if (beforeId) {
+        const idx = col.findIndex(x => x.id === beforeId);
+        if (idx === -1) pos = (col[col.length - 1]?.pos ?? 0) + 1000;
+        else if (idx === 0) pos = (col[0].pos ?? 1000) - 1000;
+        else pos = ((col[idx - 1].pos ?? 0) + (col[idx].pos ?? 0)) / 2;
+      } else {
+        pos = (col[col.length - 1]?.pos ?? 0) + 1000;
+      }
+      const changedStage = r.stageId !== stageId;
+      r.stageId = stageId; r.pos = pos; r.updatedAt = now();
+      if (changedStage) {
+        r.stageAt = now();
+        pushAct(recId, "stage", `Стадия: ${stage.label}`, s.currentUserId);
+      }
     });
   },
   createRecord(entityId: string, values: Record<string, unknown> = {}, stageId?: string): string {
     let id = "";
     mut(s => {
       const e = entityCfg(entityId);
+      const stgId = stageId ?? e.stages?.[0]?.id;
+      const col = s.records.filter(x => x.entityId === entityId && x.stageId === stgId);
       const r: Rec = {
         id: uid("r"), entityId, num: s.records.filter(x => x.entityId === entityId).length + 1,
         values, ownerId: s.currentUserId, createdAt: now(), updatedAt: now(),
-        stageId: stageId ?? e.stages?.[0]?.id, stageAt: now(),
+        stageId: stgId, stageAt: now(),
+        pos: Math.max(0, ...col.map(x => x.pos ?? 0)) + 1000, // новые — в конец колонки
       };
       s.records.push(r); id = r.id;
       pushAct(id, "created", "Запись создана", s.currentUserId);

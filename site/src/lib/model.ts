@@ -13,6 +13,7 @@ export interface Rec {
   id: string; entityId: string; num: number;
   values: Record<string, unknown>;
   stageId?: string; stageAt?: number; ownerId: string;
+  pos?: number; // ручной порядок внутри колонки (дробная позиция — совместимо с numeric в Postgres)
   createdAt: number; updatedAt: number;
 }
 export type TaskKind = "call" | "meet" | "todo" | "msg";
