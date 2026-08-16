@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
-import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, entityCfg as entCfg } from "@/lib/store";
+import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, entityCfg as entCfg } from "@/lib/store";
 import { FieldInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
@@ -37,7 +37,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
   if (!r || !e) return null;
   const titleField = e.fields.find(f => f.id === e.titleFieldId)!;
   const tasks = getState().tasks.filter(t => t.recordId === r.id).sort((a, b) => Number(a.done) - Number(b.done) || a.due - b.due);
-  const acts = getState().activities.filter(a => a.recordId === r.id).sort((a, b) => b.ts - a.ts);
+  const acts = collapseFieldRuns(getState().activities.filter(a => a.recordId === r.id).sort((a, b) => b.ts - a.ts));
   const stageIdx = e.stages?.findIndex(s => s.id === r.stageId) ?? -1;
 
   return (

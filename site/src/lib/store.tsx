@@ -627,6 +627,26 @@ export function parseRuDate(raw?: string): number | undefined {
   return undefined;
 }
 
+// схлопывание истории: серию правок ОДНОГО поля (та же запись, тот же автор, рядом по времени)
+// показываем одной строкой — финальным значением. Чинит и старый «шум» (крутил стрелку — 10 строк),
+// и работает поверх любых данных (облако/локально, до и после фикса коалесинга при записи).
+// Вход отсортирован по времени (новые сверху); оставляем самую свежую запись каждой серии.
+export function collapseFieldRuns(acts: Activity[]): Activity[] {
+  const keyOf = (a: Activity) => a.kind === "field" ? (a.editKey ?? a.text.split(":")[0]) : "";
+  const out: Activity[] = [];
+  for (const a of acts) {
+    const prev = out[out.length - 1];
+    if (a.kind === "field" && prev && prev.kind === "field"
+      && prev.recordId === a.recordId && prev.userId === a.userId
+      && keyOf(a) !== "" && keyOf(prev) === keyOf(a)
+      && Math.abs(prev.ts - a.ts) < 300000) {
+      continue; // более старую правку того же поля пропускаем — её представляет уже добавленная свежая
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 // имя собеседника для карточки/диалога: не даём голому «Telegram» — берём номер или «Клиент из …»
 export function niceContactName(name: string | undefined, channel: Channel, phone?: string): string {
   const n = (name || "").trim();

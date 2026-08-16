@@ -3,7 +3,7 @@
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
 import { useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById, allEntities, dispCtx } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById, allEntities, dispCtx, collapseFieldRuns } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -117,7 +117,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.3</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.4</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -228,7 +228,7 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.3 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.4 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -430,7 +430,7 @@ function Dashboard() {
   }
   const maxSrc = Math.max(1, ...sources.map(([, n]) => n));
 
-  const events = [...s.activities].sort((a, b) => b.ts - a.ts).slice(0, 7);
+  const events = collapseFieldRuns([...s.activities].sort((a, b) => b.ts - a.ts)).slice(0, 7);
 
   return (
     <div className="cascade mx-auto max-w-4xl px-5 py-6">
