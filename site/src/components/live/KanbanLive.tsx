@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { EntityCfg } from "@/lib/model";
 import { fmtMoney, displayValue } from "@/lib/model";
-import { A, recordsOf, recTitle, openTasksFor, dispCtx } from "@/lib/store";
+import { A, recordsOf, recTitle, openTasksFor, dispCtx, getState } from "@/lib/store";
 import { Money, UserChip } from "./bits";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -60,6 +60,9 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                 const overdue = openTasksFor(r.id).some(t => t.due < Date.now());
                 const noNext = openTasksFor(r.id).length === 0 && st.kind === "open";
                 const sub = subtitleField ? displayValue(subtitleField, r.values[subtitleField.id], dispCtx()) : "";
+                const linkedChat = getState().chats.find(c => c.recordId === r.id);
+                const lastMsg = linkedChat?.msgs[linkedChat.msgs.length - 1];
+                const snippet = lastMsg ? (lastMsg.out ? "Вы: " : "") + lastMsg.text : sub;
                 return (
                   <div key={r.id} className="relative">
                     {active && slot!.index === i && <DropLine at="top" />}
@@ -85,7 +88,7 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                       )}
                     >
                       <div className="text-[13px] font-medium leading-snug">{recTitle(r.id)}</div>
-                      {sub && sub !== recTitle(r.id) && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{sub}</div>}
+                      {snippet && snippet !== recTitle(r.id) && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{snippet}</div>}
                       <div className="mt-2 flex items-center justify-between">
                         <Money v={moneyField ? fmtMoney(r.values[moneyField.id]) : ""} className="text-[12.5px] font-medium" />
                         <span className="flex items-center gap-1.5">

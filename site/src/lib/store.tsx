@@ -353,6 +353,7 @@ export const A = {
     toast("Новое сообщение", { description: text.slice(0, 64) });
   },
   chatIncomingExt(ext: ChatExt, name: string, channel: Channel, text: string, phone?: string): string {
+    name = niceContactName(name, channel, phone);
     let id = "";
     mut(s => {
       const c: Chat = { id: uid("c"), name, phone, channel, unread: 1, msgs: [{ id: uid("m"), ts: now(), out: false, text }], ext };
@@ -368,7 +369,7 @@ export const A = {
   chatEcho(ext: ChatExt, name: string, text: string, ts?: number, phone?: string) {
     mut(s => {
       let c = s.chats.find(x => x.ext && chatExtMatch(x.ext, ext));
-      if (!c) { c = { id: uid("c"), name, phone, channel: "tg", unread: 0, msgs: [], ext }; s.chats.unshift(c); }
+      if (!c) { c = { id: uid("c"), name: niceContactName(name, "tg", phone), phone, channel: "tg", unread: 0, msgs: [], ext }; s.chats.unshift(c); }
       c.msgs.push({ id: uid("m"), ts: ts ?? now(), out: true, text });
       if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)} (с телефона): ${text}`, s.currentUserId);
     });
@@ -410,7 +411,7 @@ export const A = {
         return openDeal.id;
       }
     }
-    const values: Record<string, unknown> = { title: person ? recTitle(person.id) : c.name };
+    const values: Record<string, unknown> = { title: person ? recTitle(person.id) : niceContactName(c.name, c.channel, c.phone) };
     if (person && contactF) values[contactF.id] = person.id;
     const srcField = e.fields.find(f => f.id === "source");
     const want = c.channel === "wa" ? /whatsapp/i : c.channel === "tg" ? /telegram/i : c.channel === "max" ? /max/i : /instagram|сайт/i;
@@ -610,6 +611,13 @@ export function parseRuDate(raw?: string): number | undefined {
     return isNaN(d.getTime()) ? undefined : d.getTime();
   }
   return undefined;
+}
+
+// имя собеседника для карточки/диалога: не даём голому «Telegram» — берём номер или «Клиент из …»
+export function niceContactName(name: string | undefined, channel: Channel, phone?: string): string {
+  const n = (name || "").trim();
+  if (n && !/^(telegram|whatsapp|max|instagram)$/i.test(n)) return n;
+  return (phone && phone.trim()) || `Клиент из ${channelName(channel)}`;
 }
 
 // совпадение внешних id двух диалогов (каналы не смешиваются)
