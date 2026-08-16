@@ -26,12 +26,16 @@ export type Channel = "tg" | "wa" | "max" | "ig";
 export interface ChatMsg { id: string; ts: number; out: boolean; text: string }
 export interface Chat {
   id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[];
-  ext?: { tg?: number; wa?: string; max?: number }; // реальные внешние id; демо-чаты без ext
+  ext?: ChatExt; // реальные внешние id; демо-чаты без ext
 }
+// tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот
+export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string }
 export interface ReplyTemplate { id: string; name: string; text: string }
 
 export type IntStatus = "off" | "connecting" | "ok" | "error";
+export type TguStage = "creds" | "code" | "password"; // шаги входа в личный Telegram
 export interface Integrations {
+  tgUser: { apiId: string; apiHash: string; phone: string; session: string; status: IntStatus; stage?: TguStage; name?: string; error?: string };
   tg: { token: string; status: IntStatus; botName?: string; offset?: number; error?: string };
   wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string };
   max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string };
@@ -39,6 +43,7 @@ export interface Integrations {
   autoLead: boolean;
 }
 export const defaultIntegrations = (): Integrations => ({
+  tgUser: { apiId: "", apiHash: "", phone: "", session: "", status: "off" },
   tg: { token: "", status: "off" },
   wa: { apiUrl: "https://api.green-api.com", idInstance: "", apiToken: "", status: "off" },
   max: { token: "", status: "off" },

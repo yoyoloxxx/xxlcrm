@@ -4,7 +4,7 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity, Chat, Channel, ReplyTemplate, Integrations } from "./model";
+import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations } from "./model";
 import { uid, now, displayValue, defaultIntegrations, channelName } from "./model";
 import { ENTITIES, USERS, entityCfg, seed, DEFAULT_TEMPLATES } from "./data";
 
@@ -30,6 +30,9 @@ const persistence = {
       ints.wa.status = ints.wa.idInstance && ints.wa.apiToken ? "ok" : "off";
       ints.max.status = ints.max.token ? "ok" : "off";
       ints.tilda.status = ints.tilda.hookId ? "ok" : "off";
+      // личный Telegram: сессия есть → подключимся в фоне при старте
+      ints.tgUser.status = ints.tgUser.session ? "connecting" : "off";
+      ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
       return {
         records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [],
         chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
@@ -250,7 +253,7 @@ export const A = {
     });
     toast("Новое сообщение", { description: text.slice(0, 64) });
   },
-  chatIncomingExt(ext: NonNullable<Chat["ext"]>, name: string, channel: Channel, text: string, phone?: string): string {
+  chatIncomingExt(ext: ChatExt, name: string, channel: Channel, text: string, phone?: string): string {
     let id = "";
     mut(s => {
       const c: Chat = { id: uid("c"), name, phone, channel, unread: 1, msgs: [{ id: uid("m"), ts: now(), out: false, text }], ext };
@@ -258,6 +261,29 @@ export const A = {
     });
     toast(`Новый диалог: ${name}`, { description: text.slice(0, 64) });
     return id;
+  },
+  // исходящее, отправленное С ТЕЛЕФОНА (личный аккаунт): показываем в ленте, не трогая счётчики
+  chatEcho(ext: ChatExt, name: string, text: string, ts?: number, phone?: string) {
+    mut(s => {
+      let c = s.chats.find(x => x.ext && chatExtMatch(x.ext, ext));
+      if (!c) { c = { id: uid("c"), name, phone, channel: "tg", unread: 0, msgs: [], ext }; s.chats.unshift(c); }
+      c.msgs.push({ id: uid("m"), ts: ts ?? now(), out: true, text });
+      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)} (с телефона): ${text}`, s.currentUserId);
+    });
+  },
+  // синхронизация диалога личного Telegram при подключении/переподключении: догружаем только новое, без тостов
+  tguSyncDialog(tguId: string, name: string, phone: string | undefined, msgs: { ts: number; out: boolean; text: string }[], unread: number) {
+    mut(s => {
+      let c = s.chats.find(x => x.ext?.tgu === tguId);
+      if (!c) {
+        c = { id: uid("c"), name, phone, channel: "tg", unread: 0, msgs: [], ext: { tgu: tguId } };
+        s.chats.unshift(c);
+      }
+      c.name = name; if (phone) c.phone = phone;
+      const lastTs = c.msgs.length ? c.msgs[c.msgs.length - 1].ts : 0;
+      for (const m of msgs) if (m.ts > lastTs) c.msgs.push({ id: uid("m"), ts: m.ts, out: m.out, text: m.text });
+      if (s.activeChatId !== c.id) c.unread = Math.max(c.unread, unread);
+    });
   },
   chatCreateLead(chatId: string): string | null {
     const c = st.chats.find(x => x.id === chatId);
@@ -294,5 +320,22 @@ export const A = {
     toast.success("Заявка с Tilda упала в воронку", { description: name || phone || "" });
   },
 };
+
+// совпадение внешних id двух диалогов (каналы не смешиваются)
+function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
+  return (b.tg !== undefined && a.tg === b.tg) || (b.wa !== undefined && a.wa === b.wa)
+    || (b.max !== undefined && a.max === b.max) || (b.tgu !== undefined && a.tgu === b.tgu);
+}
+
+// общий приём входящего из ЛЮБОГО реального канала: найти диалог по внешнему id либо создать (+автолид)
+export function handleIncoming(ext: ChatExt, name: string, channel: Channel, text: string, phone?: string) {
+  const found = st.chats.find(c => c.ext && chatExtMatch(c.ext, ext));
+  if (found) { A.chatIncoming(found.id, text); return; }
+  const id = A.chatIncomingExt(ext, name, channel, text, phone);
+  if (st.integrations.autoLead) {
+    const lead = A.chatCreateLead(id);
+    if (lead) toast.success("Автолид: диалог превращён в сделку", { description: recTitle(lead) });
+  }
+}
 
 export { ENTITIES, USERS, entityCfg, channelName };

@@ -27,7 +27,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
   useEffect(() => { scrollRef.current?.scrollTo({ top: 1e9 }); }, [chat?.id, chat?.msgs.length]);
 
   const ints = s.integrations;
-  const anyReal = ints.tg.status === "ok" || ints.wa.status === "ok" || ints.max.status === "ok" || ints.tilda.status === "ok";
+  const anyReal = ints.tgUser.status === "ok" || ints.tg.status === "ok" || ints.wa.status === "ok" || ints.max.status === "ok" || ints.tilda.status === "ok";
   const linked = chat?.recordId ? recById(chat.recordId) : undefined;
 
   const send = () => {
@@ -48,7 +48,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
         {!anyReal && (
           <button onClick={goSettings} className="flex items-start gap-2 border-b px-3.5 py-2.5 text-left transition-colors hover:bg-foreground/[0.04]" style={{ background: "hsl(var(--brass) / 0.09)" }}>
             <Plug className="mt-0.5 size-3.5 shrink-0" style={{ color: "var(--brass-ink)" }} />
-            <span className="text-[11.5px] leading-snug"><b>Подключите настоящие каналы</b>: Telegram-бот, WhatsApp, MAX, Tilda — Настройки → Интеграции</span>
+            <span className="text-[11.5px] leading-snug"><b>Подключите настоящие каналы</b>: личный Telegram по рабочему номеру, WhatsApp по QR, боты TG/MAX, Tilda — Настройки → Интеграции</span>
           </button>
         )}
         <div className="flex-1 divide-y overflow-y-auto">
@@ -95,7 +95,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
             <div className="min-w-0">
               <div className="truncate text-[13.5px] font-semibold">{chat.name}</div>
               <div className="font-mono2 text-[10.5px] text-muted-foreground">
-                {channelName(chat.channel)}{chat.phone ? ` · ${chat.phone}` : ""}{chat.ext ? " · настоящий" : " · демо"}
+                {channelName(chat.channel)}{chat.phone ? ` · ${chat.phone}` : ""}{chat.ext?.tgu ? " · личный аккаунт" : chat.ext?.tg !== undefined ? " · бот" : chat.ext ? " · настоящий" : " · демо"}
               </div>
             </div>
             <div className="ml-auto flex items-center gap-1.5">

@@ -1,6 +1,7 @@
 // Реальные каналы прямо из браузера: Telegram Bot API, WhatsApp (Green API), MAX Bot API, Tilda (webhook-мост).
 // Токены хранятся только в localStorage этого браузера. Все ошибки — мягкие: тост + статус, тик продолжается.
-import { getState, A, recTitle } from "./store";
+import { getState, A, handleIncoming } from "./store";
+import { tguInit, tguSend } from "./tg-user";
 import { toast } from "sonner";
 
 const ints = () => getState().integrations;
@@ -215,26 +216,13 @@ function parseTilda(content: string, query?: Record<string, string>): Record<str
 
 export const tildaHookUrl = () => (ints().tilda.hookId ? `https://webhook.site/${ints().tilda.hookId}` : "");
 
-// ---------- общий приём и отправка ----------
-function handleIncoming(ext: { tg?: number; wa?: string; max?: number }, name: string, channel: "tg" | "wa" | "max", text: string, phone?: string) {
-  const found = getState().chats.find(c =>
-    (ext.tg !== undefined && c.ext?.tg === ext.tg) ||
-    (ext.wa !== undefined && c.ext?.wa === ext.wa) ||
-    (ext.max !== undefined && c.ext?.max === ext.max)
-  );
-  if (found) { A.chatIncoming(found.id, text); return; }
-  const id = A.chatIncomingExt(ext, name, channel, text, phone);
-  if (ints().autoLead) {
-    const lead = A.chatCreateLead(id);
-    if (lead) toast.success("Автолид: диалог превращён в сделку", { description: recTitle(lead) });
-  }
-}
-
+// ---------- отправка (общий приём handleIncoming живёт в store) ----------
 export async function sendChatMessage(chatId: string, text: string) {
   const chat = getState().chats.find(c => c.id === chatId);
   if (!chat) return;
   A.chatSend(chatId, text);
-  if (chat.ext?.tg !== undefined) await tgSend(chat.ext.tg, text);
+  if (chat.ext?.tgu !== undefined) await tguSend(chat.ext.tgu, text);
+  else if (chat.ext?.tg !== undefined) await tgSend(chat.ext.tg, text);
   else if (chat.ext?.wa !== undefined) await waSend(chat.ext.wa, text);
   else if (chat.ext?.max !== undefined) await maxSend(chat.ext.max, text);
 }
@@ -244,6 +232,7 @@ let timer: number | undefined;
 let busy = false;
 export function initIntegrations() {
   if (timer) return;
+  void tguInit(); // личный Telegram: событийный (MTProto), не поллинг
   timer = window.setInterval(async () => {
     if (busy) return;
     busy = true;

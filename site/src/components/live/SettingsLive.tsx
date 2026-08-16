@@ -3,12 +3,13 @@ import { useState } from "react";
 import type { IntStatus } from "@/lib/model";
 import { useApp, A } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
+import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync } from "@/lib/tg-user";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, Send, Trash2, X } from "lucide-react";
+import { Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function Status({ st, okText = "подключено" }: { st: IntStatus; okText?: string }) {
@@ -27,6 +28,88 @@ function Status({ st, okText = "подключено" }: { st: IntStatus; okText
   );
 }
 
+// Карточка ЛИЧНОГО Telegram-аккаунта: вход по номеру, как в приложении (MTProto из браузера)
+function TgUserCard() {
+  const s = useApp();
+  const t = s.integrations.tgUser;
+  const [apiId, setApiId] = useState(t.apiId);
+  const [apiHash, setApiHash] = useState(t.apiHash);
+  const [phone, setPhone] = useState(t.phone || "+7");
+  const [code, setCode] = useState("");
+  const [pw, setPw] = useState("");
+  const busy = t.status === "connecting";
+
+  return (
+    <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
+      <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+        <User className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Telegram: личный аккаунт
+        <span className="rounded-full px-1.5 py-px text-[9px] font-medium" style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>рабочий номер</span>
+        <Status st={t.status} okText={t.name ?? "подключено"} />
+      </div>
+
+      {t.status !== "ok" && !t.stage && (
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+            Ваш обычный Telegram — вход как в приложении: диалоги рабочего номера появятся во «Входящих», ответы уходят от вашего имени.
+            Один раз возьмите <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools.
+          </p>
+          {t.error && <p className="mt-1 text-[11.5px] text-destructive">{t.error}</p>}
+          <div className="mt-2 grid gap-2 sm:grid-cols-[96px_1fr_150px_auto]">
+            <Input className="h-9 text-[12.5px]" placeholder="api_id" value={apiId} onChange={e => setApiId(e.target.value)} disabled={busy} />
+            <Input className="h-9 text-[12.5px]" type="password" placeholder="api_hash" value={apiHash} onChange={e => setApiHash(e.target.value)} disabled={busy} />
+            <Input className="h-9 text-[12.5px]" placeholder="+79161234567" value={phone} onChange={e => setPhone(e.target.value)} disabled={busy} />
+            <Button className="h-9" disabled={busy || !apiId.trim() || !apiHash.trim() || phone.trim().length < 10}
+              onClick={() => tguStartLogin(apiId, apiHash, phone)}>{busy ? "Подключаю…" : "Получить код"}</Button>
+          </div>
+          <p className="mt-1.5 text-[10.5px] text-muted-foreground">Сессия хранится только в этом браузере — подключайте на своём компьютере.</p>
+        </>
+      )}
+
+      {t.stage === "code" && (
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+            Telegram прислал код входа на {t.phone} — в приложение Telegram (или по SMS).
+          </p>
+          {t.error && <p className="mt-1 text-[11.5px] text-destructive">{t.error}</p>}
+          <div className="mt-2 flex gap-2">
+            <Input className="h-9 w-36 text-center font-mono2 text-[14px] tracking-[0.3em]" placeholder="•••••" autoFocus
+              value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ""))}
+              onKeyDown={e => e.key === "Enter" && code.trim() && (tguSubmitCode(code), setCode(""))} />
+            <Button className="h-9" disabled={!code.trim()} onClick={() => { tguSubmitCode(code); setCode(""); }}>Войти</Button>
+            <Button variant="outline" className="h-9" onClick={() => { setCode(""); tguCancelLogin(); }}>Отмена</Button>
+          </div>
+        </>
+      )}
+
+      {t.stage === "password" && (
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">У аккаунта включена двухэтапная проверка — введите облачный пароль.</p>
+          {t.error && <p className="mt-1 text-[11.5px] text-destructive">{t.error}</p>}
+          <div className="mt-2 flex gap-2">
+            <Input className="h-9 w-56 text-[12.5px]" type="password" placeholder="облачный пароль" autoFocus
+              value={pw} onChange={e => setPw(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && pw && (tguSubmitPassword(pw), setPw(""))} />
+            <Button className="h-9" disabled={!pw} onClick={() => { tguSubmitPassword(pw); setPw(""); }}>Войти</Button>
+            <Button variant="outline" className="h-9" onClick={() => { setPw(""); tguCancelLogin(); }}>Отмена</Button>
+          </div>
+        </>
+      )}
+
+      {t.status === "ok" && (
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+            Диалоги синхронизируются во «Входящие» (личные чаты, без ботов и групп). Сообщения, отправленные с телефона, тоже видны в CRM.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button variant="outline" className="h-9 gap-1.5" onClick={() => { tguResync(); toast("Обновляю диалоги…"); }}><RefreshCw className="size-3.5" /> Обновить диалоги</Button>
+            <Button variant="outline" className="h-9" onClick={tguDisconnect}>Выйти из аккаунта</Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function IntegrationsLive() {
   const s = useApp();
   const ints = s.integrations;
@@ -42,10 +125,12 @@ export function IntegrationsLive() {
         <Plug className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Интеграции: реальные каналы
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-        Работают прямо из браузера, токены хранятся только на этом компьютере. Входящие появляются во «Входящих», ответы уходят клиентам.
+        Работают прямо из браузера, токены и сессии хранятся только на этом компьютере. Личные аккаунты подключаются по рабочему номеру: Telegram — входом как в приложении, WhatsApp — по QR.
       </p>
 
-      <div className="mt-2.5 rounded-md border p-3">
+      <TgUserCard />
+
+      <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <Send className="size-3.5 text-muted-foreground" /> Telegram-бот <Status st={ints.tg.status} okText={ints.tg.botName ?? "подключено"} />
         </div>
@@ -62,7 +147,7 @@ export function IntegrationsLive() {
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageCircle className="size-3.5 text-muted-foreground" /> WhatsApp <span className="text-[10.5px] font-normal text-muted-foreground">Green API</span> <Status st={ints.wa.status} />
         </div>
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">green-api.com → инстанс → QR своим WhatsApp → idInstance и ApiToken сюда.</p>
+        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Ваш личный WhatsApp на рабочем номере: green-api.com → инстанс → QR своим WhatsApp (как WhatsApp Web) → idInstance и ApiToken сюда.</p>
         {ints.wa.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.wa.error}</p>}
         <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_110px_1fr_auto]">
           <Input className="h-9 text-[12.5px]" placeholder="API URL" value={waUrl} onChange={e => setWaUrl(e.target.value)} />
@@ -76,7 +161,7 @@ export function IntegrationsLive() {
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageSquare className="size-3.5 text-muted-foreground" /> MAX <span className="text-[10.5px] font-normal text-muted-foreground">Bot API</span> <Status st={ints.max.status} okText={ints.max.botName ?? "подключено"} />
         </div>
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Бот создаётся у мастера ботов MAX (@MasterBot в MAX) → токен сюда. Работает зеркально Telegram.</p>
+        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Бот создаётся у мастера ботов MAX (@MasterBot в MAX) → токен сюда. Личные аккаунты MAX пока не открывает через API — как только откроет, добавлю вход по номеру.</p>
         {ints.max.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.max.error}</p>}
         <div className="mt-2 flex gap-2">
           <Input className="h-9 flex-1 text-[12.5px]" type="password" placeholder="токен бота MAX" value={maxToken} onChange={e => setMaxToken(e.target.value)} />
