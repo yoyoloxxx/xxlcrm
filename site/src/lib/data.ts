@@ -1,0 +1,117 @@
+// Конфигурация разделов (пока статическая — конструктор оживёт на шаге 3) + демо-сиды
+import type { EntityCfg, Field, Option, Rec, Stage, Task, Activity, User } from "./model";
+import { uid, days, now } from "./model";
+
+const opt = (label: string, color: string): Option => ({ id: "o_" + label.toLowerCase().replace(/[^a-zа-яё0-9]/g, ""), label, color });
+const f = (id: string, label: string, type: Field["type"], extra: Partial<Field> = {}): Field => ({ id, label, type, inTable: true, ...extra });
+const stg = (id: string, label: string, color: string, kind: Stage["kind"] = "open"): Stage => ({ id, label, color, kind });
+
+export const USERS: User[] = [
+  { id: "u1", name: "Глеб", role: "Владелец", hue: 42 },
+  { id: "u2", name: "Марина", role: "Менеджер", hue: 152 },
+  { id: "u3", name: "Артём", role: "Менеджер", hue: 210 },
+];
+
+export const ENTITIES: EntityCfg[] = [
+  {
+    id: "deals", name: "Сделка", namePlural: "Сделки", icon: "briefcase", titleFieldId: "title",
+    fields: [
+      f("title", "Название", "text", { required: true }),
+      f("amount", "Сумма", "money", { required: true }),
+      f("company", "Компания", "relation", { relationTo: "companies" }),
+      f("contact", "Контакт", "relation", { relationTo: "contacts" }),
+      f("source", "Источник", "select", { options: [opt("Рекомендация", "#7D8A5C"), opt("Сайт", "#6E8B8A"), opt("Telegram", "#5C7A9E"), opt("Конференция", "#B0725A"), opt("Холодный звонок", "#8A8578")] }),
+      f("track", "Трек-номер СДЭК", "text", { inTable: false }),
+      f("deadline", "Дедлайн", "date", { inTable: false }),
+      f("notes", "Комментарий", "textarea", { inTable: false }),
+    ],
+    stages: [
+      stg("s_new", "Новая", "#8A8578"), stg("s_qual", "Квалификация", "#BC9F5C"),
+      stg("s_neg", "Переговоры", "#B0725A"), stg("s_contract", "Договор", "#6E8B8A"),
+      stg("s_won", "Оплачено", "#6E8B4F", "won"), stg("s_lost", "Проиграна", "#A8543F", "lost"),
+    ],
+  },
+  {
+    id: "companies", name: "Компания", namePlural: "Компании", icon: "building", titleFieldId: "title",
+    fields: [
+      f("title", "Название", "text", { required: true }),
+      f("sphere", "Сфера", "select", { options: [opt("IT", "#6E8B8A"), opt("Медицина", "#8B6E86"), opt("Ритейл", "#BC9F5C"), opt("Производство", "#8A8578"), opt("Стройка", "#B0725A"), opt("Логистика", "#5C7A9E")] }),
+      f("city", "Город", "text"),
+      f("phone", "Телефон", "phone"),
+      f("site", "Сайт", "url"),
+    ],
+  },
+  {
+    id: "contacts", name: "Контакт", namePlural: "Контакты", icon: "users", titleFieldId: "title",
+    fields: [
+      f("title", "Имя", "text", { required: true }),
+      f("role", "Должность", "text"),
+      f("phone", "Телефон", "phone"),
+      f("email", "Email", "email"),
+      f("company", "Компания", "relation", { relationTo: "companies" }),
+    ],
+  },
+];
+
+export const entityCfg = (id: string) => ENTITIES.find(e => e.id === id)!;
+
+// ---------- демо-сиды (создаются один раз, дальше живут в хранилище) ----------
+export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[] } {
+  const records: Rec[] = [];
+  const activities: Activity[] = [];
+  let n: Record<string, number> = {};
+  const rec = (entityId: string, values: Record<string, unknown>, o: { stage?: string; owner?: string; ago?: number } = {}) => {
+    n[entityId] = (n[entityId] ?? 0) + 1;
+    const createdAt = days(-(o.ago ?? 5));
+    const r: Rec = {
+      id: uid("r"), entityId, num: n[entityId], values,
+      ownerId: o.owner ?? "u1", createdAt, updatedAt: createdAt,
+      stageId: o.stage, stageAt: createdAt + 2 * 3600000,
+    };
+    records.push(r);
+    activities.push({ id: uid("a"), recordId: r.id, ts: createdAt, kind: "created", text: "Запись создана", userId: r.ownerId });
+    return r;
+  };
+
+  const co = (t: string, sphere: string, city: string, phone: string) =>
+    rec("companies", { title: t, sphere: "o_" + sphere, city, phone }, { ago: 20 });
+  const c1 = co("СтройТех", "стройка", "Казань", "+7 931 177-63-57");
+  const c2 = co("Фабрика Уюта", "производство", "Екатеринбург", "+7 934 618-63-90");
+  const c3 = co("Клиника «Мед+»", "медицина", "Москва", "+7 920 865-64-65");
+  const c4 = co("Лаборатория 42", "it", "Казань", "+7 932 363-85-35");
+  const c5 = co("ТК Восток", "логистика", "Москва", "+7 984 359-29-50");
+  const c6 = co("Азбука Вкуса", "ритейл", "СПб", "+7 961 473-36-85");
+
+  const p = (t: string, role: string, phone: string, email: string, companyId: string) =>
+    rec("contacts", { title: t, role, phone, email, company: companyId }, { ago: 15, owner: "u2" });
+  const p1 = p("Виктор Гусев", "Владелец", "+7 931 502-18-46", "v.gusev@stroyteh.ru", c1.id);
+  const p2 = p("Анна Волкова", "Директор по маркетингу", "+7 934 771-20-84", "a.volkova@uyut.ru", c2.id);
+  const p3 = p("Дарья Киселёва", "Главврач", "+7 920 337-60-12", "kiseleva@medplus.ru", c3.id);
+  const p4 = p("Сергей Соколов", "ИТ-директор", "+7 932 415-77-03", "s.sokolov@lab42.ru", c4.id);
+  const p5 = p("Ксения Макарова", "Закупки", "+7 961 208-44-91", "makarova@av.ru", c6.id);
+
+  const d = (t: string, amount: number, companyId: string | undefined, contactId: string | undefined, source: string, stage: string, ago: number, owner = "u1") =>
+    rec("deals", { title: t, amount, company: companyId, contact: contactId, source: "o_" + source }, { stage, ago, owner });
+  d("Лендинг курса аналитики", 87000, undefined, undefined, "рекомендация", "s_new", 1, "u1");
+  d("Сайт-каталог мебели", 412000, c2.id, p2.id, "сайт", "s_new", 2, "u2");
+  d("Брендинг клиники", 180000, c3.id, p3.id, "telegram", "s_qual", 4, "u3");
+  d("Поддержка на год", 540000, c4.id, p4.id, "сайт", "s_qual", 6, "u2");
+  const big = d("Портал для «СтройТех»", 1240000, c1.id, p1.id, "рекомендация", "s_neg", 9, "u1");
+  d("Мобильное приложение", 890000, c5.id, undefined, "холодныйзвонок", "s_neg", 7, "u3");
+  d("Интеграция с 1С", 310000, c6.id, p5.id, "конференция", "s_contract", 12, "u1");
+  d("Аудит маркетинга", 96000, c5.id, undefined, "конференция", "s_won", 16, "u2");
+
+  activities.push(
+    { id: uid("a"), recordId: big.id, ts: days(-2), kind: "comment", text: "Клиент просит скидку 10%, обсуждаем этапность оплаты", userId: "u2" },
+    { id: uid("a"), recordId: big.id, ts: days(-1), kind: "stage", text: "Стадия: Переговоры", userId: "u1" },
+  );
+
+  const tasks: Task[] = [
+    { id: uid("t"), title: "Дожать: КП без ответа 3 дня", kind: "call", recordId: big.id, ownerId: "u2", due: now() - 20 * 3600000, done: false },
+    { id: uid("t"), title: "Позвонить: обсудить смету этапа 2", kind: "call", recordId: records.find(r => r.values.title === "Поддержка на год")!.id, ownerId: "u1", due: now() + 3 * 3600000, done: false },
+    { id: uid("t"), title: "Встреча по договору в Zoom", kind: "meet", recordId: records.find(r => r.values.title === "Интеграция с 1С")!.id, ownerId: "u1", due: now() + 26 * 3600000, done: false },
+    { id: uid("t"), title: "Отправить материалы после звонка", kind: "msg", recordId: records.find(r => r.values.title === "Брендинг клиники")!.id, ownerId: "u3", due: now() + 6 * 3600000, done: false },
+  ];
+
+  return { records, tasks, activities };
+}

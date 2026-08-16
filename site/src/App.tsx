@@ -2,6 +2,11 @@
 // Правило обёртки: интерактивна ТОЛЬКО навигация (сайдбар, вкладки представлений, переключатели экранов).
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
 import { useEffect, useState } from "react";
+import { Toaster } from "sonner";
+import { useApp, A, recordsOf, undo, entityCfg, getState } from "@/lib/store";
+import { KanbanLive } from "@/components/live/KanbanLive";
+import { TableLive } from "@/components/live/TableLive";
+import { RecordDrawer } from "@/components/live/RecordDrawer";
 import {
   ArrowUpRight, Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, ChevronDown,
   Columns3, Contact2, FileText, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
@@ -12,17 +17,17 @@ import { cn } from "@/lib/utils";
 
 type Page = "myday" | "tasks" | "inbox" | "deals" | "companies" | "contacts" | "dashboard" | "automations" | "settings";
 
-const NAV: { id: Page; label: string; icon: React.ElementType; badge?: string }[] = [
-  { id: "myday", label: "Мой день", icon: SunMedium, badge: "4" },
-  { id: "tasks", label: "Задачи", icon: ListChecks, badge: "7" },
-  { id: "inbox", label: "Входящие", icon: InboxIcon, badge: "3" },
+const NAV: { id: Page; label: string; icon: React.ElementType; badge?: () => number }[] = [
+  { id: "myday", label: "Мой день", icon: SunMedium },
+  { id: "tasks", label: "Задачи", icon: ListChecks, badge: () => getState().tasks.filter(t => !t.done).length },
+  { id: "inbox", label: "Входящие", icon: InboxIcon, badge: () => 3 },
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "automations", label: "Автоматизации", icon: Zap },
 ];
-const SECTIONS: { id: Page; label: string; icon: React.ElementType; count: string }[] = [
-  { id: "deals", label: "Сделки", icon: Briefcase, count: "14" },
-  { id: "companies", label: "Компании", icon: Building2, count: "8" },
-  { id: "contacts", label: "Контакты", icon: Users, count: "23" },
+const SECTIONS: { id: Page; label: string; icon: React.ElementType }[] = [
+  { id: "deals", label: "Сделки", icon: Briefcase },
+  { id: "companies", label: "Компании", icon: Building2 },
+  { id: "contacts", label: "Контакты", icon: Users },
 ];
 const TITLES: Record<Page, string> = {
   myday: "Мой день", tasks: "Задачи", inbox: "Входящие", deals: "Сделки", companies: "Компании",
@@ -74,7 +79,8 @@ function Avatar({ n, hue, size = 22 }: { n: string; hue: number; size?: number }
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>("myday");
+  const s = useApp();
+  const [page, setPage] = useState<Page>("deals");
   const [dealsView, setDealsView] = useState<DealsViewId>("kanban");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("xxl-shell-theme") as "dark") === "dark" ? "dark" : "light"; } catch { return "light"; }
@@ -83,6 +89,19 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        const t = e.target as HTMLElement | null;
+        if (t && t.closest("input,textarea,[contenteditable]")) return;
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+  const openTasks = s.tasks.filter(t => !t.done).length;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -108,7 +127,7 @@ export default function App() {
                 page === n.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
               <n.icon className="size-4" />
               <span className="flex-1">{n.label}</span>
-              {n.badge && <span className="font-mono2 rounded-full px-1.5 text-[10.5px] font-medium" style={{ background: "hsl(var(--brass) / 0.22)", color: "var(--brass-ink)" }}>{n.badge}</span>}
+              {n.badge && n.badge() > 0 && <span className="font-mono2 rounded-full px-1.5 text-[10.5px] font-medium" style={{ background: "hsl(var(--brass) / 0.22)", color: "var(--brass-ink)" }}>{n.badge()}</span>}
             </button>
           ))}
         </nav>
@@ -124,7 +143,7 @@ export default function App() {
                 page === sec.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
               <sec.icon className="size-4" />
               <span className="flex-1">{sec.label}</span>
-              <span className="font-mono2 text-[10.5px] text-muted-foreground/70">{sec.count}</span>
+              <span className="font-mono2 text-[10.5px] text-muted-foreground/70">{recordsOf(sec.id).length}</span>
             </button>
           ))}
           <Idle className="mt-1 justify-start gap-2 border-dashed px-2.5 text-[12.5px]"><Plus className="size-3.5" /> Новый раздел</Idle>
@@ -179,10 +198,15 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm · обёртка v0.2 · активны навигация и тема</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.3 · живое: Сделки, Компании, Контакты · остальное — заглушки</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{TITLES[page]}</span>
         </footer>
       </div>
+
+      {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
+      <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
+        ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
+        : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" } }} />
     </div>
   );
 }
@@ -347,12 +371,12 @@ function InboxScreen() {
   );
 }
 
-type DealsViewId = "kanban" | "table" | "calendar" | "card";
+type DealsViewId = "kanban" | "table" | "calendar";
 
 function ViewTabs({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
   return (
     <div className="flex items-center gap-0.5">
-      {([["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar], ["card", "Карточка", Contact2]] as const).map(([id, label, Ic]) => (
+      {([["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]] as const).map(([id, label, Ic]) => (
         <button key={id} onClick={() => setView(id)}
           className={cn("press relative flex items-center gap-1.5 px-2.5 py-2 text-[12.5px] transition-colors duration-150", view === id ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
           <Ic className="size-3.5" /> {label}
@@ -363,200 +387,58 @@ function ViewTabs({ view, setView }: { view: DealsViewId; setView: (v: DealsView
   );
 }
 
-interface DealRow { s: number; n: string; c: string; v: string; who: readonly [string, number]; chip?: string; danger?: string; sel?: boolean }
-const DEALS: DealRow[] = [
-  { s: 0, n: "Лендинг курса аналитики", c: "Максим Веретенников", v: "87 000 ₽", who: ["Г", 42], chip: "нет задачи", sel: true },
-  { s: 0, n: "Сайт-каталог мебели", c: "Фабрика Уюта", v: "412 000 ₽", who: ["М", 152] },
-  { s: 1, n: "Брендинг клиники", c: "Клиника «Мед+»", v: "180 000 ₽", who: ["А", 210] },
-  { s: 1, n: "Поддержка на год", c: "Лаборатория 42", v: "540 000 ₽", who: ["М", 152], chip: "нет задачи", sel: true },
-  { s: 2, n: "Портал для «СтройТех»", c: "СтройТех", v: "1 240 000 ₽", who: ["Г", 42], danger: "просрочено" },
-  { s: 2, n: "Мобильное приложение", c: "ТК Восток", v: "890 000 ₽", who: ["А", 210] },
-  { s: 3, n: "Интеграция с 1С", c: "Азбука Вкуса", v: "310 000 ₽", who: ["Г", 42] },
-];
 const STAGES = [["Новая", 0, "499 000 ₽"], ["Квалификация", 1, "720 000 ₽"], ["Переговоры", 3, "2 130 000 ₽"], ["Договор", 4, "310 000 ₽"]] as const;
 
 function Deals({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
+  const e = entityCfg("deals");
+  const count = recordsOf("deals").length;
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-5 pt-4">
-        <ScreenHead title="Сделки" sub="14 записей · воронка «Продажа»">
-          <Idle><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
-          <Idle><FileUp className="size-3" /> Импорт</Idle>
-          <Idle primary><Plus className="size-3.5" /> Сделка</Idle>
+        <ScreenHead title="Сделки" sub={`${count} записей · воронка «Продажа» · живой раздел`}>
+          <Idle title="Конструктор раздела оживёт на шаге 3"><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
+          <Idle title="Импорт оживёт вместе с конструктором"><FileUp className="size-3" /> Импорт</Idle>
+          <button onClick={() => A.openRecord(A.createRecord("deals", {}))}
+            className="press inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground transition-colors duration-150 hover:opacity-90">
+            <Plus className="size-3.5" /> Сделка
+          </button>
         </ScreenHead>
         <div className="mt-1 flex items-center justify-between">
           <ViewTabs view={view} setView={setView} />
           <div className="flex items-center gap-1.5 pb-1.5">
-            <Idle><ListFilter className="size-3" /> Фильтры</Idle>
-            <Idle>Мои</Idle>
-            <Idle className="h-8 w-8 justify-center px-0"><MoreHorizontal className="size-3.5" /></Idle>
+            <Idle title="Фильтры оживут на шаге 3"><ListFilter className="size-3" /> Фильтры</Idle>
+            <Idle title="Фильтр по ответственному оживёт на шаге 3">Мои</Idle>
           </div>
         </div>
       </div>
-
-      {view === "kanban" ? (
-        <div className="relative flex-1 overflow-hidden">
-          <div className="cascade flex h-full gap-3 overflow-x-auto p-4">
-            {STAGES.map(([label, tone, sum], col) => (
-              <div key={label} className="flex h-full w-[250px] shrink-0 flex-col rounded-lg" style={{ background: "var(--kanban-col)" }}>
-                <div className="flex items-center gap-2 px-3 pb-1.5 pt-2.5">
-                  <span className="size-2 rounded-[3px]" style={{ background: ["#8A8578", "#BC9F5C", "#B0725A", "#6E8B8A"][col] }} />
-                  <span className="text-[12.5px] font-semibold">{label}</span>
-                  <span className="font-mono2 text-[11px] text-muted-foreground">{DEALS.filter(d => d.s === col).length}</span>
-                  <Amount v={sum} className="ml-auto text-[10.5px] text-muted-foreground" />
-                </div>
-                <div className="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-                  {DEALS.filter(d => d.s === col).map((d, i) => {
-                    const selected = d.sel;
-                    return (
-                      <button key={i} title="В обёртке активна только навигация"
-                        className={cn("press group/card relative rounded-md border bg-card p-2.5 text-left shadow-[0_1px_2px_rgba(50,42,25,0.05)] transition-shadow duration-200 hover:shadow-[0_5px_16px_-8px_rgba(50,42,25,0.28)]",
-                          selected && "border-transparent ring-2 ring-[hsl(var(--brass))]")}>
-                        <span className={cn("absolute right-2 top-2 grid h-4 w-4 place-items-center rounded-[4px] border transition-opacity",
-                          selected ? "border-transparent" : "opacity-0 group-hover/card:opacity-100")}
-                          style={selected ? { background: "hsl(var(--primary))" } : undefined}>
-                          {selected && <span className="font-mono2 text-[9px] font-bold text-primary-foreground">✓</span>}
-                        </span>
-                        <div className="pr-5 text-[13px] font-medium leading-snug">{d.n}</div>
-                        <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{d.c}</div>
-                        <div className="mt-2 flex items-center justify-between">
-                          <Amount v={d.v} className="font-medium" />
-                          <span className="flex items-center gap-1.5">
-                            {d.danger && <span className="rounded-full bg-destructive/10 px-1.5 py-px text-[10px] font-medium text-destructive">{d.danger}</span>}
-                            {d.chip && !d.danger && <span className="rounded-full px-1.5 py-px text-[10px] font-medium" style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>{d.chip}</span>}
-                            <Avatar n={d.who[0]} hue={d.who[1]} size={18} />
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                  <Idle className="justify-start gap-1.5 border-0"><Plus className="size-3.5" /> Добавить</Idle>
-                </div>
-              </div>
-            ))}
-          </div>
-          {/* Панель массовых действий воронки (демо выделения: 2 карточки) */}
-          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-card px-3 py-2 shadow-xl">
-            <span className="font-mono2 px-1 text-[12px] font-medium">2 выбрано</span>
-            <Idle className="rounded-full">Стадия <ChevronDown className="size-3" /></Idle>
-            <Idle className="rounded-full"><Users className="size-3" /> Ответственный</Idle>
-            <Idle className="rounded-full"><Merge className="size-3.5" /> Объединить</Idle>
-            <Idle className="rounded-full text-destructive hover:text-destructive"><Trash2 className="size-3" /> Удалить</Idle>
-            <Idle className="h-7 w-7 justify-center rounded-full border-0 px-0"><X className="size-3.5" /></Idle>
-          </div>
-        </div>
-      ) : view === "calendar" ? (
-        <DealsCalendar />
-      ) : view === "card" ? (
-        <RecordCardScreen />
-      ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="w-full min-w-max border-separate border-spacing-0 text-[13px]">
-            <thead className="sticky top-0">
-              <tr>
-                {["Название", "Стадия", "Сумма", "Компания", "Ответственный", ""].map(h => (
-                  <th key={h} className="border-b bg-background px-3.5 py-2 text-left text-[11.5px] font-medium text-muted-foreground first:pl-5">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {DEALS.map((d, i) => (
-                <tr key={i} className="hover:bg-muted/40">
-                  <td className="border-b py-2 pl-5 pr-3.5 font-medium">{d.n}</td>
-                  <td className="border-b px-3.5 py-2"><StagePill label={STAGES[d.s][0]} tone={STAGES[d.s][1]} small /></td>
-                  <td className="border-b px-3.5 py-2"><Amount v={d.v} /></td>
-                  <td className="border-b px-3.5 py-2 text-muted-foreground">{d.c}</td>
-                  <td className="border-b px-3.5 py-2"><span className="flex items-center gap-1.5"><Avatar n={d.who[0]} hue={d.who[1]} size={19} /><span className="text-[12.5px]">{d.who[0] === "Г" ? "Глеб" : d.who[0] === "М" ? "Марина" : "Артём"}</span></span></td>
-                  <td className="border-b px-3.5 py-2" />
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="text-[11.5px] text-muted-foreground">
-                <td className="px-5 py-2">Итого: 7 из 14</td><td /><td className="px-3.5 py-2"><Amount v="3 659 000 ₽" className="font-medium" /></td><td colSpan={3} />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Companies() {
-  const rows = [
-    ["СтройТех", "Стройка", "Казань", "+7 931 177-63-57", "1 240 000 ₽"],
-    ["Фабрика Уюта", "Производство", "Екатеринбург", "+7 934 618-63-90", "412 000 ₽"],
-    ["Клиника «Мед+»", "Медицина", "Москва", "+7 920 865-64-65", "180 000 ₽"],
-    ["Лаборатория 42", "IT", "Казань", "+7 932 363-85-35", "540 000 ₽"],
-    ["ТК Восток", "Логистика", "Москва", "+7 984 359-29-50", "890 000 ₽"],
-    ["Азбука Вкуса", "Ритейл", "СПб", "+7 961 473-36-85", "310 000 ₽"],
-  ];
-  return (
-    <div className="cascade flex h-full flex-col">
-      <div className="border-b px-5 pb-2 pt-4">
-        <ScreenHead title="Компании" sub="8 записей">
-          <Idle><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
-          <Idle primary><Plus className="size-3.5" /> Компания</Idle>
-        </ScreenHead>
-      </div>
-      <div className="flex-1 overflow-auto">
-        <table className="w-full min-w-max border-separate border-spacing-0 text-[13px]">
-          <thead className="sticky top-0">
-            <tr>{["Название", "Сфера", "Город", "Телефон", "Сделки, сумма", ""].map(h => <th key={h} className="border-b bg-background px-3.5 py-2 text-left text-[11.5px] font-medium text-muted-foreground first:pl-5">{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="hover:bg-muted/40">
-                <td className="border-b py-2.5 pl-5 pr-3.5 font-medium">{r[0]}</td>
-                <td className="border-b px-3.5 py-2.5"><StagePill label={r[1]} tone={i + 1} small /></td>
-                <td className="border-b px-3.5 py-2.5 text-muted-foreground">{r[2]}</td>
-                <td className="border-b px-3.5 py-2.5"><Amount v={r[3]} className="text-muted-foreground" /></td>
-                <td className="border-b px-3.5 py-2.5"><Amount v={r[4]} className="font-medium" /></td>
-                <td className="border-b px-3.5 py-2.5" />
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {view === "kanban" && <KanbanLive entity={e} />}
+        {view === "table" && <TableLive entity={e} />}
+        {view === "calendar" && <DealsCalendar />}
       </div>
     </div>
   );
 }
 
-function Contacts() {
-  const rows = [
-    ["Анна Волкова", "Директор по маркетингу", "Фабрика Уюта", "+7 934 771-20-84"],
-    ["Сергей Соколов", "ИТ-директор", "Лаборатория 42", "+7 932 415-77-03"],
-    ["Ксения Макарова", "Закупки", "Азбука Вкуса", "+7 961 208-44-91"],
-    ["Виктор Гусев", "Владелец", "СтройТех", "+7 931 502-18-46"],
-    ["Дарья Киселёва", "Главврач", "Клиника «Мед+»", "+7 920 337-60-12"],
-  ];
+function Companies() { return <LiveSection id="companies" title="Компании" />; }
+
+function Contacts() { return <LiveSection id="contacts" title="Контакты" />; }
+
+function LiveSection({ id, title }: { id: string; title: string }) {
+  const e = entityCfg(id);
+  const count = recordsOf(id).length;
   return (
-    <div className="cascade flex h-full flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b px-5 pb-2 pt-4">
-        <ScreenHead title="Контакты" sub="23 записи">
-          <Idle><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
-          <Idle primary><Plus className="size-3.5" /> Контакт</Idle>
+        <ScreenHead title={title} sub={`${count} записей · живой раздел`}>
+          <Idle title="Конструктор раздела оживёт на шаге 3"><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
+          <button onClick={() => A.openRecord(A.createRecord(id, {}))}
+            className="press inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground transition-colors duration-150 hover:opacity-90">
+            <Plus className="size-3.5" /> {e.name}
+          </button>
         </ScreenHead>
       </div>
-      <div className="flex-1 overflow-auto">
-        <table className="w-full min-w-max border-separate border-spacing-0 text-[13px]">
-          <thead className="sticky top-0">
-            <tr>{["Имя", "Должность", "Компания", "Телефон", ""].map(h => <th key={h} className="border-b bg-background px-3.5 py-2 text-left text-[11.5px] font-medium text-muted-foreground first:pl-5">{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="hover:bg-muted/40">
-                <td className="border-b py-2.5 pl-5 pr-3.5"><span className="flex items-center gap-2 font-medium"><Avatar n={r[0][0]} hue={(i * 67 + 30) % 360} size={20} />{r[0]}</span></td>
-                <td className="border-b px-3.5 py-2.5 text-muted-foreground">{r[1]}</td>
-                <td className="border-b px-3.5 py-2.5">{r[2]}</td>
-                <td className="border-b px-3.5 py-2.5"><Amount v={r[3]} className="text-muted-foreground" /></td>
-                <td className="border-b px-3.5 py-2.5" />
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="min-h-0 flex-1 overflow-auto"><TableLive entity={e} /></div>
     </div>
   );
 }
@@ -856,88 +738,6 @@ function DealsCalendar() {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function RecordCardScreen() {
-  const fields: [string, React.ReactNode][] = [
-    ["Сумма", <Amount key="1" v="1 240 000 ₽" className="text-[13px] font-medium" />],
-    ["Компания", "СтройТех"],
-    ["Контакт", "Виктор Гусев"],
-    ["Источник", <StagePill key="2" label="Рекомендация" tone={2} small />],
-    ["Трек-номер СДЭК", <span key="3" className="flex items-center gap-1.5"><Amount v="10083456789" /><span className="rounded-full px-1.5 py-px text-[10px] font-medium" style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>вручено</span></span>],
-    ["Дедлайн", <Amount key="4" v="29 авг 2026" />],
-  ];
-  const timeline = [
-    ["12:47", "Ответ клиенту в Telegram по шаблону «Трек-номер»"],
-    ["вчера", "СДЭК: статус заказа — вручен получателю"],
-    ["13 авг", "Стадия: Переговоры"],
-    ["12 авг", "Заявка с Tilda: имя, телефон, email, дата рождения — сохранены в карточку"],
-    ["11 авг", "Автоматизация: задача «Связаться в течение часа»"],
-  ];
-  return (
-    <div className="cascade mx-auto max-w-3xl px-5 py-5">
-      <div className="rounded-lg border bg-card">
-        <div className="flex items-start gap-3 border-b px-4 py-3">
-          <Briefcase className="mt-0.5 size-4 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[15px] font-semibold leading-tight">Портал для «СтройТех»</div>
-            <div className="font-mono2 mt-0.5 text-[10.5px] text-muted-foreground">Сделка №5 · создана 11 авг · ведёт Глеб</div>
-          </div>
-          <Idle><Sparkles className="size-3" style={{ color: "var(--brass-ink)" }} /> AI</Idle>
-          <Idle><FileText className="size-3" /> Счёт PDF</Idle>
-          <Idle className="h-8 w-8 justify-center px-0"><MoreHorizontal className="size-3.5" /></Idle>
-        </div>
-        <div className="border-b px-4 py-2.5">
-          <div className="flex gap-1">
-            {[1, 1, 1, 0.35, 0.2, 0.2].map((o, i) => (
-              <span key={i} className="h-4 flex-1 rounded-[3px]" style={{ background: `hsl(var(--brass) / ${o})` }} />
-            ))}
-          </div>
-          <div className="mt-1 flex justify-between text-[10.5px] text-muted-foreground">
-            <span className="font-medium text-foreground">Переговоры</span>
-            <span>клик по полосе — смена стадии</span>
-          </div>
-        </div>
-        <div className="grid gap-x-6 gap-y-3 px-4 py-4 sm:grid-cols-2">
-          {fields.map(([l, v]) => (
-            <div key={l as string}>
-              <div className="eyebrow">{l}</div>
-              <div className="mt-1 text-[13px]">{v}</div>
-            </div>
-          ))}
-        </div>
-        <div className="border-t px-4 py-3.5">
-          <div className="eyebrow">Задачи</div>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {[["Позвонить: финальные правки договора", "сегодня 16:00", false], ["Отправить трек-номер клиенту", "выполнена вчера", true]].map(([t, d, done], i) => (
-              <div key={i} className="flex items-center gap-2.5 rounded-md border px-2.5 py-2">
-                <Idle className={cn("h-[16px] w-[16px] justify-center rounded-[4px] border p-0", done && "border-transparent")} title="В обёртке чекбоксы неактивны">
-                  {done ? <span className="font-mono2 text-[9px]" style={{ color: "var(--brass-ink)" }}>✓</span> : <span />}
-                </Idle>
-                <span className={cn("flex-1 text-[12.5px]", done && "text-muted-foreground line-through")}>{t}</span>
-                <span className="font-mono2 text-[10.5px] text-muted-foreground">{d}</span>
-              </div>
-            ))}
-            <div className="flex items-center gap-2">
-              <input readOnly placeholder="Новая задача + Enter" title="В обёртке активна только навигация"
-                className="h-8 flex-1 cursor-default rounded-md border bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground/70" />
-            </div>
-          </div>
-        </div>
-        <div className="border-t px-4 py-3.5">
-          <div className="eyebrow">Хронология</div>
-          <div className="mt-2.5 flex flex-col gap-2">
-            {timeline.map(([t, e]) => (
-              <div key={e} className="flex items-baseline gap-2.5 text-[12.5px]">
-                <span className="font-mono2 w-12 shrink-0 text-[10.5px] text-muted-foreground">{t}</span>
-                <span className="leading-snug">{e}</span>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );
