@@ -1,6 +1,13 @@
 // Конфигурация разделов (пока статическая — конструктор оживёт на шаге 3) + демо-сиды
-import type { EntityCfg, Field, Option, Rec, Stage, Task, Activity, User } from "./model";
+import type { EntityCfg, Field, Option, Rec, Stage, Task, Activity, User, Chat, ReplyTemplate } from "./model";
 import { uid, days, now } from "./model";
+
+export const DEFAULT_TEMPLATES: ReplyTemplate[] = [
+  { id: "tpl_hello", name: "Приветствие", text: "Здравствуйте, {имя}! Меня зовут {менеджер}. Получили вашу заявку — удобно будет созвониться сегодня?" },
+  { id: "tpl_track", name: "Трек-номер СДЭК", text: "Добрый день, {имя}! Ваш заказ передан в СДЭК, трек-номер: {трек}. Отследить можно на cdek.ru/track" },
+  { id: "tpl_pay", name: "Напоминание об оплате", text: "{имя}, напоминаем про счёт на {сумма} — как будет оплата, сразу стартуем следующий этап." },
+  { id: "tpl_bday", name: "С днём рождения", text: "{имя}, поздравляем вас с днём рождения! 🎉 Дарим скидку 10% на следующий заказ — действует неделю." },
+];
 
 const opt = (label: string, color: string): Option => ({ id: "o_" + label.toLowerCase().replace(/[^a-zа-яё0-9]/g, ""), label, color });
 const f = (id: string, label: string, type: Field["type"], extra: Partial<Field> = {}): Field => ({ id, label, type, inTable: true, ...extra });
@@ -56,7 +63,7 @@ export const ENTITIES: EntityCfg[] = [
 export const entityCfg = (id: string) => ENTITIES.find(e => e.id === id)!;
 
 // ---------- демо-сиды (создаются один раз, дальше живут в хранилище) ----------
-export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[] } {
+export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[] } {
   const records: Rec[] = [];
   const activities: Activity[] = [];
   let n: Record<string, number> = {};
@@ -113,5 +120,25 @@ export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[] 
     { id: uid("t"), title: "Отправить материалы после звонка", kind: "msg", recordId: records.find(r => r.values.title === "Брендинг клиники")!.id, ownerId: "u3", due: now() + 6 * 3600000, done: false },
   ];
 
-  return { records, tasks, activities };
+  const chat = (name: string, channel: Chat["channel"], recordId: string | undefined, msgs: [number, boolean, string][], unread = 0, phone?: string): Chat => ({
+    id: uid("c"), name, channel, recordId, unread, phone,
+    msgs: msgs.map(([agoH, out, text]) => ({ id: uid("m"), ts: now() - agoH * 3600000, out, text })),
+  });
+  const lend = records.find(r => r.values.title === "Лендинг курса аналитики")!;
+  const chats: Chat[] = [
+    chat("Максим Веретенников", "tg", lend.id, [
+      [30, false, "Здравствуйте! Мне вас порекомендовали. Нужен лендинг для курса, бюджет ~90 тысяч. С чего начнём?"],
+      [29, true, "Добрый день, Максим! Отличная задача. Расскажите пару слов о курсе — соберу структуру и предложение."],
+      [5, false, "Курс по продуктовой аналитике, старт потока 15 сентября. Важно успеть за 2 недели."],
+    ], 1, "+7 916 284-51-07"),
+    chat("Ольга, «Клиника Мед+»", "wa", records.find(r => r.values.title === "Брендинг клиники")!.id, [
+      [50, false, "Когда покажете варианты логотипа?"],
+      [49, true, "В четверг пришлём три направления на выбор."],
+    ], 0, "+7 920 865-64-65"),
+    chat("Новый клиент (демо)", "tg", undefined, [
+      [2, false, "Здравствуйте! Видел ваши работы, хочу обсудить сайт для автосервиса."],
+    ], 1),
+  ];
+
+  return { records, tasks, activities, chats };
 }

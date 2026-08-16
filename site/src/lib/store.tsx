@@ -4,14 +4,15 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity } from "./model";
-import { uid, now, displayValue } from "./model";
-import { ENTITIES, USERS, entityCfg, seed } from "./data";
+import type { Field, Rec, Task, Activity, Chat, Channel, ReplyTemplate, Integrations } from "./model";
+import { uid, now, displayValue, defaultIntegrations, channelName } from "./model";
+import { ENTITIES, USERS, entityCfg, seed, DEFAULT_TEMPLATES } from "./data";
 
-interface DataState { records: Rec[]; tasks: Task[]; activities: Activity[] }
+interface DataState { records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
+  activeChatId: string | null;
 }
 
 // ---------- адаптер персистентности (при Supabase заменяется целиком этот объект) ----------
@@ -23,11 +24,27 @@ const persistence = {
       if (!raw) return null;
       const d = JSON.parse(raw);
       if (!Array.isArray(d?.records)) return null;
-      return { records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [] };
+      const ints = { ...defaultIntegrations(), ...(d.integrations ?? {}) } as Integrations;
+      // после перезагрузки поднимаем сохранённые подключения обратно в ok
+      ints.tg.status = ints.tg.token ? "ok" : "off";
+      ints.wa.status = ints.wa.idInstance && ints.wa.apiToken ? "ok" : "off";
+      ints.max.status = ints.max.token ? "ok" : "off";
+      ints.tilda.status = ints.tilda.hookId ? "ok" : "off";
+      return {
+        records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [],
+        chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
+        replyTemplates: Array.isArray(d.replyTemplates) && d.replyTemplates.length ? d.replyTemplates : DEFAULT_TEMPLATES,
+        integrations: ints,
+      };
     } catch { return null; }
   },
   save(s: DataState) {
-    try { window.localStorage.setItem(LS_KEY, JSON.stringify({ v: 1, records: s.records, tasks: s.tasks, activities: s.activities })); } catch { /* памяти нет — живём в RAM */ }
+    try {
+      window.localStorage.setItem(LS_KEY, JSON.stringify({
+        v: 2, records: s.records, tasks: s.tasks, activities: s.activities,
+        chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
+      }));
+    } catch { /* памяти нет — живём в RAM */ }
   },
   reset() { try { window.localStorage.removeItem(LS_KEY); } catch { /* ignore */ } },
 };
@@ -47,9 +64,9 @@ function ensurePos(records: Rec[]) {
   }
 }
 
-const initial = persistence.load() ?? seed();
+const initial: DataState = persistence.load() ?? { ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensurePos(initial.records);
-const st: State = { ...initial, currentUserId: "u1", drawerRecordId: null };
+const st: State = { ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null };
 
 let version = 0;
 const listeners = new Set<() => void>();
@@ -60,6 +77,10 @@ const emit = () => {
   saveTimer = window.setTimeout(() => persistence.save(st), 300);
   listeners.forEach(l => l());
 };
+// Закрытие/перезагрузка вкладки не должны терять последние 300 мс изменений — сбрасываем отложенное сохранение сразу
+window.addEventListener("pagehide", () => {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; persistence.save(st); }
+});
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 export function useApp(): State { useSyncExternalStore(subscribe, () => version); return st; }
 export const getState = () => st;
@@ -201,9 +222,77 @@ export const A = {
   resetDemo() {
     persistence.reset();
     const fresh = seed();
-    mut(s => { Object.assign(s, fresh); s.drawerRecordId = null; });
+    ensurePos(fresh.records);
+    mut(s => { Object.assign(s, fresh, { replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() }); s.drawerRecordId = null; s.activeChatId = null; });
     toast("Демо-данные сброшены к исходным");
+  },
+
+  // ---------- инбокс ----------
+  openChat(id: string | null) {
+    mut(s => {
+      s.activeChatId = id;
+      if (id) { const c = s.chats.find(x => x.id === id); if (c) c.unread = 0; }
+    });
+  },
+  chatSend(chatId: string, text: string) {
+    mut(s => {
+      const c = s.chats.find(x => x.id === chatId)!;
+      c.msgs.push({ id: uid("m"), ts: now(), out: true, text });
+      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)}: ${text}`, s.currentUserId);
+    });
+  },
+  chatIncoming(chatId: string, text: string) {
+    mut(s => {
+      const c = s.chats.find(x => x.id === chatId); if (!c) return;
+      c.msgs.push({ id: uid("m"), ts: now(), out: false, text });
+      if (s.activeChatId !== c.id) c.unread++;
+      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `${channelName(c.channel)}, клиент: ${text}`);
+    });
+    toast("Новое сообщение", { description: text.slice(0, 64) });
+  },
+  chatIncomingExt(ext: NonNullable<Chat["ext"]>, name: string, channel: Channel, text: string, phone?: string): string {
+    let id = "";
+    mut(s => {
+      const c: Chat = { id: uid("c"), name, phone, channel, unread: 1, msgs: [{ id: uid("m"), ts: now(), out: false, text }], ext };
+      s.chats.unshift(c); id = c.id;
+    });
+    toast(`Новый диалог: ${name}`, { description: text.slice(0, 64) });
+    return id;
+  },
+  chatCreateLead(chatId: string): string | null {
+    const c = st.chats.find(x => x.id === chatId);
+    if (!c) return null;
+    const e = entityCfg("deals");
+    const values: Record<string, unknown> = { title: c.name }; // телефон уйдёт в хронологию сделки
+    const srcField = e.fields.find(f => f.id === "source");
+    const want = c.channel === "wa" ? /whatsapp/i : c.channel === "tg" ? /telegram/i : c.channel === "max" ? /max/i : /instagram|сайт/i;
+    const srcOpt = srcField?.options?.find(o => want.test(o.label)) ?? srcField?.options?.find(o => /сайт/i.test(o.label));
+    if (srcField && srcOpt) values[srcField.id] = srcOpt.id;
+    const id = A.createRecord("deals", values);
+    mut(s => {
+      const cc = s.chats.find(x => x.id === chatId)!;
+      cc.recordId = id;
+      pushAct(id, "comment", `Сделка создана из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}`);
+    });
+    toast.success("Сделка создана и связана с диалогом");
+    return id;
+  },
+
+  // ---------- интеграции и шаблоны ----------
+  intPatch(fn: (i: Integrations) => void) { mut(s => fn(s.integrations)); },
+  setAutoLead(v: boolean) { mut(s => { s.integrations.autoLead = v; }); },
+  tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
+  tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
+  tplDelete(id: string) { mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); },
+  tildaLead(fields: Record<string, string>) {
+    const low = (k: string) => k.toLowerCase();
+    const findVal = (keys: string[]) => Object.entries(fields).find(([k]) => keys.some(kk => low(k).includes(kk)))?.[1];
+    const name = findVal(["name", "имя", "фио"]);
+    const phone = findVal(["phone", "тел"]);
+    const id = A.createRecord("deals", { title: name || "Заявка с Tilda", source: entityCfg("deals").fields.find(f => f.id === "source")?.options?.find(o => /сайт/i.test(o.label))?.id });
+    mut(() => pushAct(id, "comment", `Заявка с Tilda: ${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ")}`));
+    toast.success("Заявка с Tilda упала в воронку", { description: name || phone || "" });
   },
 };
 
-export { ENTITIES, USERS, entityCfg };
+export { ENTITIES, USERS, entityCfg, channelName };

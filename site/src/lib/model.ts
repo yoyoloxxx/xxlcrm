@@ -22,6 +22,31 @@ export type ActKind = "created" | "stage" | "field" | "comment" | "task";
 export interface Activity { id: string; recordId: string; ts: number; kind: ActKind; text: string; userId?: string }
 export interface User { id: string; name: string; role: string; hue: number }
 
+export type Channel = "tg" | "wa" | "max" | "ig";
+export interface ChatMsg { id: string; ts: number; out: boolean; text: string }
+export interface Chat {
+  id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[];
+  ext?: { tg?: number; wa?: string; max?: number }; // реальные внешние id; демо-чаты без ext
+}
+export interface ReplyTemplate { id: string; name: string; text: string }
+
+export type IntStatus = "off" | "connecting" | "ok" | "error";
+export interface Integrations {
+  tg: { token: string; status: IntStatus; botName?: string; offset?: number; error?: string };
+  wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string };
+  max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string };
+  tilda: { hookId: string; status: IntStatus; seen: string[]; error?: string };
+  autoLead: boolean;
+}
+export const defaultIntegrations = (): Integrations => ({
+  tg: { token: "", status: "off" },
+  wa: { apiUrl: "https://api.green-api.com", idInstance: "", apiToken: "", status: "off" },
+  max: { token: "", status: "off" },
+  tilda: { hookId: "", status: "off", seen: [] },
+  autoLead: true,
+});
+export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : "Instagram");
+
 let idc = 0;
 export const uid = (p = "id") => `${p}_${Date.now().toString(36)}${(++idc).toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
 export const DAY = 86400000;

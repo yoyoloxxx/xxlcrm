@@ -7,11 +7,14 @@ import { useApp, A, recordsOf, undo, entityCfg, getState } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
+import { InboxLive } from "@/components/live/InboxLive";
+import { IntegrationsLive, TemplatesLive } from "@/components/live/SettingsLive";
+import { initIntegrations } from "@/lib/integrations";
 import {
-  ArrowUpRight, Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, ChevronDown,
-  Columns3, Contact2, FileText, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
-  Merge, MessageCircle, MessageSquare, Moon, MoreHorizontal, Package, PanelLeft, Pencil, Phone, Plug, Plus,
-  Search, Send, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Trash2, Users, X, Zap,
+  Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, ChevronDown,
+  Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
+  MessageSquare, Moon, Package, PanelLeft, Phone, Plus,
+  Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Users, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,7 +23,7 @@ type Page = "myday" | "tasks" | "inbox" | "deals" | "companies" | "contacts" | "
 const NAV: { id: Page; label: string; icon: React.ElementType; badge?: () => number }[] = [
   { id: "myday", label: "Мой день", icon: SunMedium },
   { id: "tasks", label: "Задачи", icon: ListChecks, badge: () => getState().tasks.filter(t => !t.done).length },
-  { id: "inbox", label: "Входящие", icon: InboxIcon, badge: () => 3 },
+  { id: "inbox", label: "Входящие", icon: InboxIcon, badge: () => getState().chats.reduce((n, c) => n + c.unread, 0) },
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "automations", label: "Автоматизации", icon: Zap },
 ];
@@ -52,10 +55,6 @@ function Idle({ children, className, primary, title }: { children: React.ReactNo
     </button>
   );
 }
-
-const Amount = ({ v, className }: { v: string; className?: string }) => (
-  <span className={cn("font-mono2 tnum text-[12.5px]", className)}>{v}</span>
-);
 
 function StagePill({ label, tone = 0, small }: { label: string; tone?: number; small?: boolean }) {
   const colors = ["#8A8578", "#BC9F5C", "#7D8A5C", "#B0725A", "#6E8B8A", "#6E8B4F", "#A8543F"];
@@ -89,6 +88,7 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
+  useEffect(() => { initIntegrations(); }, []); // реальные каналы: опрос TG/WA/MAX/Tilda
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
@@ -101,7 +101,6 @@ export default function App() {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
-  const openTasks = s.tasks.filter(t => !t.done).length;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -112,7 +111,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.1</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.4</span>
         </div>
 
         <div className="mx-3 mb-3 flex items-center justify-between rounded-md border bg-card px-2.5 py-[7px]">
@@ -188,17 +187,17 @@ export default function App() {
         <main className="min-h-0 flex-1 overflow-y-auto">
           {page === "myday" && <MyDay />}
           {page === "tasks" && <TasksScreen />}
-          {page === "inbox" && <InboxScreen />}
+          {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {page === "deals" && <Deals view={dealsView} setView={setDealsView} />}
           {page === "companies" && <Companies />}
           {page === "contacts" && <Contacts />}
           {page === "dashboard" && <Dashboard />}
           {page === "automations" && <Automations />}
-          {page === "settings" && <SettingsScreen />}
+          {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.3 · живое: Сделки, Компании, Контакты · остальное — заглушки</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.4 · живое: Сделки, Компании, Контакты, Входящие + каналы и шаблоны · остальное — заглушки</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{TITLES[page]}</span>
         </footer>
       </div>
@@ -285,92 +284,6 @@ function MyDay() {
   );
 }
 
-function InboxScreen() {
-  const chats = [
-    { ch: "TG", c: "#5C7A9E", n: "Максим Веретенников", m: "Мне вас порекомендовали. Нужен лендинг для курса…", t: "12:42", unread: 1, active: true },
-    { ch: "WA", c: "#6E8B4F", n: "Ольга, «Клиника Мед+»", m: "Вы: К пятнице пришлём ссылку на тест", t: "вчера", unread: 0 },
-    { ch: "IG", c: "#A8547C", n: "anna.decor · Instagram", m: "Здравствуйте! Сколько стоит сайт-визитка?", t: "14:05", unread: 1 },
-    { ch: "MAX", c: "#8B6E86", n: "Клиент из MAX", m: "Добрый день, уточните сроки по заказу", t: "10:18", unread: 1 },
-    { ch: "TG", c: "#5C7A9E", n: "Иван Петров", m: "Отправил бриф на почту, гляньте пожалуйста", t: "вчера", unread: 0 },
-    { ch: "WA", c: "#6E8B4F", n: "Фабрика Уюта · закупки", m: "Вы: Счёт выставили, оригиналы отправим почтой", t: "13 авг", unread: 0 },
-  ];
-  const thread = [
-    { out: false, t: "Здравствуйте! Мне вас порекомендовали. Нужен лендинг для курса, бюджет примерно 80–90 тысяч. С чего начнём?", at: "12:42" },
-    { out: true, t: "Добрый день, Максим! Отличный бюджет для сильного лендинга. Расскажите пару слов о курсе — соберу структуру и предложение к завтрашнему дню.", at: "12:47" },
-    { out: false, t: "Курс по продуктовой аналитике, старт потока 15 сентября. Важно успеть за 2 недели.", at: "12:53" },
-  ];
-  return (
-    <div className="flex h-full">
-      <div className="flex w-[280px] shrink-0 flex-col border-r">
-        <div className="flex items-center justify-between border-b px-3.5 py-2.5">
-          <span className="text-[13.5px] font-semibold">Входящие</span>
-          <Idle><Plug className="size-3" /> каналы</Idle>
-        </div>
-        <div className="flex-1 divide-y overflow-y-auto">
-          {chats.map((c, i) => (
-            <button key={i} title="В обёртке активна только навигация"
-              className={cn("press flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left transition-colors duration-150", c.active ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.035]")}>
-              <span className="font-mono2 mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-[9px] font-medium" style={{ background: c.c + "20", color: c.c }}>{c.ch}</span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-baseline justify-between gap-2">
-                  <span className={cn("truncate text-[12.5px]", c.unread ? "font-semibold" : "font-medium")}>{c.n}</span>
-                  <span className="font-mono2 shrink-0 text-[10px] text-muted-foreground">{c.t}</span>
-                </span>
-                <span className="mt-0.5 flex items-center gap-1.5">
-                  <span className="truncate text-[11.5px] text-muted-foreground">{c.m}</span>
-                  {c.unread > 0 && <span className="font-mono2 ml-auto grid h-4 min-w-4 shrink-0 place-items-center rounded-full px-1 text-[9px] font-semibold text-primary-foreground" style={{ background: "hsl(var(--primary))" }}>{c.unread}</span>}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="border-t px-3.5 py-2 text-[10.5px] leading-snug text-muted-foreground">Каналы: Telegram, WhatsApp, MAX, Instagram, Tilda — подключаются в настройках</div>
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b px-4 py-2.5">
-          <div className="min-w-0">
-            <div className="truncate text-[13.5px] font-semibold">Максим Веретенников</div>
-            <div className="font-mono2 text-[10.5px] text-muted-foreground">Telegram · +7 916 284-51-07</div>
-          </div>
-          <div className="ml-auto flex gap-1.5">
-            <Idle><Sparkles className="size-3" style={{ color: "var(--brass-ink)" }} /> AI-ответ</Idle>
-            <Idle primary><ArrowUpRight className="size-3.5" /> Открыть сделку</Idle>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="cascade mx-auto flex max-w-xl flex-col gap-2">
-            {thread.map((m, i) => (
-              <div key={i} className={cn("flex", m.out ? "justify-end" : "justify-start")}>
-                <div className={cn("max-w-[80%] rounded-xl px-3.5 py-2 text-[13px] leading-snug", m.out ? "rounded-br-[4px] text-primary-foreground" : "rounded-bl-[4px] border bg-card")}
-                  style={m.out ? { background: "hsl(var(--primary))" } : undefined}>
-                  {m.t}
-                  <span className={cn("font-mono2 mt-0.5 block text-right text-[9.5px]", m.out ? "text-primary-foreground/70" : "text-muted-foreground")}>{m.at}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="border-t p-3">
-          <div className="mx-auto max-w-xl">
-            <div className="mb-2 flex items-center gap-1.5 overflow-x-auto">
-              <span className="eyebrow shrink-0">Шаблоны</span>
-              {["Приветствие", "Трек-номер СДЭК", "С днём рождения", "Напомнить об оплате"].map(t => (
-                <Idle key={t} className="h-6 shrink-0 rounded-full px-2 text-[11px]" title="Шаблон подставит {имя}, {трек}, {сумма} из карточки — в обёртке неактивно">{t}</Idle>
-              ))}
-              <Idle className="h-6 w-6 shrink-0 justify-center rounded-full px-0"><Plus className="size-3" /></Idle>
-            </div>
-            <div className="flex items-center gap-2">
-              <input readOnly placeholder="Ответить в Telegram…" title="В обёртке активна только навигация"
-                className="h-9 flex-1 cursor-default rounded-full border bg-card px-4 text-[13px] outline-none placeholder:text-muted-foreground/80" />
-              <Idle primary className="h-9 w-9 rounded-full p-0"><Send className="size-4" /></Idle>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type DealsViewId = "kanban" | "table" | "calendar";
 
 function ViewTabs({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
@@ -386,8 +299,6 @@ function ViewTabs({ view, setView }: { view: DealsViewId; setView: (v: DealsView
     </div>
   );
 }
-
-const STAGES = [["Новая", 0, "499 000 ₽"], ["Квалификация", 1, "720 000 ₽"], ["Переговоры", 3, "2 130 000 ₽"], ["Договор", 4, "310 000 ₽"]] as const;
 
 function Deals({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
   const e = entityCfg("deals");
@@ -545,7 +456,7 @@ function Automations() {
   );
 }
 
-function SettingsScreen() {
+function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
   return (
     <div className="cascade mx-auto max-w-2xl px-5 py-6">
       <ScreenHead title="Настройки" />
@@ -556,59 +467,40 @@ function SettingsScreen() {
           <input readOnly value="Digital Loft" title="В обёртке активна только навигация" className="mt-1 h-9 w-full max-w-xs cursor-default rounded-md border bg-background px-2.5 text-[13px] outline-none" />
           <label className="eyebrow mt-3.5 block">Тема</label>
           <div className="mt-1.5 flex gap-1.5">
-            <Idle className="border-transparent bg-[hsl(42_42%_55%/0.2)] font-medium text-[color:var(--brass-ink)] hover:text-[color:var(--brass-ink)]"><SunMedium className="size-3.5" /> Светлая</Idle>
-            <Idle><Moon className="size-3.5" /> Тёмная</Idle>
-          </div>
-        </div>
-        <div className="px-4 py-3.5">
-          <div className="flex items-center gap-1.5 text-[13px] font-semibold"><Plug className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Интеграции</div>
-          <div className="mt-2.5 flex flex-col gap-2">
-            {([
-              { n: "Telegram-бот", d: "входящие и ответы клиентам из CRM", Ic: Send, on: true },
-              { n: "WhatsApp · Green API", d: "переписка через ваш номер", Ic: MessageCircle, on: true },
-              { n: "MAX · Bot API", d: "гос-мессенджер: входящие и ответы", Ic: MessageSquare, on: false },
-              { n: "Instagram · через провайдера", d: "Wazzup/Umnico держат соединение на своих серверах — работает без VPN", Ic: InstaIcon, on: false },
-              { n: "Tilda", d: "заявки с форм: имя, телефон, email и дата рождения — в карточку", Ic: PanelLike, on: true },
-              { n: "СДЭК", d: "трек-номера созданных заказов сами подтянутся в сделки + статусы доставки", Ic: Package, on: false },
-            ] as { n: string; d: string; Ic: React.ElementType; on: boolean }[]).map((x, i) => (
-              <div key={i} className="flex items-center gap-3 rounded-md border px-3 py-2.5">
-                <x.Ic className="size-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2 text-[12.5px] font-medium">{x.n}
-                    {x.on && <span className="rounded-full px-1.5 py-px text-[9.5px] font-medium" style={{ background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" }}>подключено</span>}
-                  </span>
-                  <span className="block text-[11px] leading-snug text-muted-foreground">{x.d}</span>
-                </div>
-                <Idle>{x.on ? "Настроить" : "Подключить"}</Idle>
-              </div>
+            {([["light", "Светлая", SunMedium], ["dark", "Тёмная", Moon]] as const).map(([id, label, Ic]) => (
+              <button key={id} type="button" onClick={() => setTheme(id)}
+                className={cn("press inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] transition-colors duration-150",
+                  theme === id
+                    ? "border border-transparent bg-[hsl(42_42%_55%/0.2)] font-medium text-[color:var(--brass-ink)]"
+                    : "border text-muted-foreground hover:border-foreground/25 hover:text-foreground")}>
+                <Ic className="size-3.5" /> {label}
+              </button>
             ))}
           </div>
         </div>
+        <IntegrationsLive />
         <div className="px-4 py-3.5">
-          <div className="flex items-center gap-1.5 text-[13px] font-semibold"><MessageSquare className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Шаблоны ответов</div>
-          <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-            Переменные подставляются из карточки автоматически: <code className="font-mono2 text-[11px]">{"{имя} {трек} {сумма} {стадия} {менеджер} {компания}"}</code>
-          </p>
+          <div className="text-[13px] font-semibold">Скоро</div>
           <div className="mt-2.5 flex flex-col gap-2">
-            {[
-              ["Приветствие", "Здравствуйте, {имя}! Меня зовут {менеджер}. Получили вашу заявку — удобно созвониться сегодня?"],
-              ["Трек-номер СДЭК", "Добрый день, {имя}! Ваш заказ передан в СДЭК, трек-номер {трек}. Отследить: cdek.ru/track"],
-              ["С днём рождения", "{имя}, поздравляем вас с днём рождения! Дарим скидку 10% на следующий заказ — действует неделю."],
-            ].map(([n, t], i) => (
-              <div key={i} className="flex items-start gap-3 rounded-md border px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <div className="text-[12.5px] font-medium">{n}</div>
-                  <div className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{t}</div>
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  <Idle className="h-7 w-7 justify-center px-0"><Pencil className="size-3" /></Idle>
-                  <Idle className="h-7 w-7 justify-center px-0"><Trash2 className="size-3" /></Idle>
-                </div>
+            <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-2.5">
+              <InstaIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium">Instagram · через провайдера</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">без VPN нужен провайдер (Wazzup/Umnico) и серверная часть — подключу на шаге Supabase</span>
               </div>
-            ))}
-            <Idle className="justify-start gap-1.5 border-dashed"><Plus className="size-3.5" /> Новый шаблон</Idle>
+              <Idle title="Появится после серверной части (шаг Supabase)">Скоро</Idle>
+            </div>
+            <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-2.5">
+              <Package className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium">СДЭК: трек-номера в сделки</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">API СДЭК закрыт для браузера — нужен серверный мост, добавлю на шаге Supabase</span>
+              </div>
+              <Idle title="Появится после серверной части (шаг Supabase)">Скоро</Idle>
+            </div>
           </div>
         </div>
+        <TemplatesLive />
         <div className="px-4 py-3.5">
           <div className="flex items-center gap-1.5 text-[13px] font-semibold"><Sparkles className="size-3.5" style={{ color: "var(--brass-ink)" }} /> AI-ассистент</div>
           <p className="mt-1 text-[12px] text-muted-foreground">Резюме записей, черновики ответов, «спроси CRM». Ключ хранится локально.</p>
@@ -750,16 +642,6 @@ function InstaIcon({ className }: { className?: string }) {
       <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" />
       <circle cx="12" cy="12" r="3.6" />
       <circle cx="17.2" cy="6.8" r="0.9" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-// Tilda-иконка: у lucide нет — маленький аккуратный примитив
-function PanelLike({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn("lucide", className)}>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M3 9h18" /><path d="M7 13h6" />
     </svg>
   );
 }

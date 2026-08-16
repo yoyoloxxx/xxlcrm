@@ -4,7 +4,7 @@ import type { EntityCfg, Field, Rec } from "@/lib/model";
 import { displayValue, fmtMoney } from "@/lib/model";
 import { A, recordsOf, recTitle, openTasksFor, dispCtx, entityCfg, USERS } from "@/lib/store";
 import { FieldInput } from "./FieldInput";
-import { Money, Pill, UserChip } from "./bits";
+import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowDown, ArrowUp, Maximize2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
