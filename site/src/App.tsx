@@ -2,16 +2,18 @@
 // Правило обёртки: интерактивна ТОЛЬКО навигация (сайдбар, вкладки представлений, переключатели экранов).
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
 import { useEffect, useState } from "react";
-import { Toaster } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState } from "@/lib/store";
+import { Toaster, toast } from "sonner";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
 import { InboxLive } from "@/components/live/InboxLive";
 import { IntegrationsLive, TemplatesLive } from "@/components/live/SettingsLive";
 import { initIntegrations } from "@/lib/integrations";
+import { cloudBoot } from "@/lib/cloud";
+import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import {
-  Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, ChevronDown,
+  Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
   MessageSquare, Moon, Package, PanelLeft, Phone, Plus,
   Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Users, Zap,
@@ -88,7 +90,7 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
-  useEffect(() => { initIntegrations(); }, []); // реальные каналы: опрос TG/WA/MAX/Tilda
+  useEffect(() => { initIntegrations(); void cloudBoot(); }, []); // каналы + вход в облако, если сессия сохранена
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
@@ -111,13 +113,32 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.5</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.6</span>
         </div>
 
-        <div className="mx-3 mb-3 flex items-center justify-between rounded-md border bg-card px-2.5 py-[7px]">
-          <span className="truncate text-[12.5px] font-medium">Digital Loft</span>
-          <ChevronDown className="size-3.5 text-muted-foreground" />
-        </div>
+        {s.mode === "cloud" ? (
+          <button
+            onClick={() => { navigator.clipboard?.writeText(s.inviteCode).then(() => toast("Код приглашения скопирован: " + s.inviteCode)); }}
+            title="Скопировать код приглашения для сотрудника"
+            className="press mx-3 mb-3 flex items-center justify-between gap-2 rounded-md border bg-card px-2.5 py-[7px] text-left transition-colors duration-150 hover:border-foreground/25">
+            <span className="min-w-0">
+              <span className="block truncate text-[12.5px] font-medium">{s.wsName}</span>
+              <span className="font-mono2 block text-[9.5px] text-muted-foreground">в команде: {s.users.length} · код {s.inviteCode}</span>
+            </span>
+            <Copy className="size-3.5 shrink-0 text-muted-foreground" />
+          </button>
+        ) : (
+          <button
+            onClick={() => setAuthStage("auth")}
+            title="Войти или создать аккаунт — данные станут общими для команды"
+            className="press mx-3 mb-3 flex items-center justify-between gap-2 rounded-md border border-dashed bg-card px-2.5 py-[7px] text-left transition-colors duration-150 hover:border-foreground/25">
+            <span>
+              <span className="block text-[12.5px] font-medium">Digital Loft</span>
+              <span className="block text-[9.5px] text-muted-foreground">демо · войти в аккаунт</span>
+            </span>
+            <LogIn className="size-3.5 shrink-0 text-muted-foreground" />
+          </button>
+        )}
 
         <nav className="flex flex-col gap-px px-3">
           {NAV.map(n => (
@@ -181,7 +202,11 @@ export default function App() {
             <Bell className="size-4" />
             <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full" style={{ background: "hsl(var(--brass))" }} />
           </Idle>
-          <Idle className="h-8 border-0 px-1"><Avatar n="Г" hue={42} size={26} /></Idle>
+          {s.mode === "cloud" ? (() => { const me = s.users.find(u => u.id === s.currentUserId); return (
+            <button className="press h-8 px-1" title={me?.name ?? ""} onClick={() => setPage("settings")}>
+              <Avatar n={(me?.name ?? "?").trim().charAt(0).toUpperCase() || "?"} hue={me?.hue ?? 42} size={26} />
+            </button>
+          ); })() : <Idle className="h-8 border-0 px-1"><Avatar n="Г" hue={42} size={26} /></Idle>}
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto">
@@ -197,12 +222,13 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.5 · живое: Сделки, Компании, Контакты, Входящие + личный Telegram, WhatsApp, боты, Tilda, шаблоны · остальное — заглушки</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.6 · живое: аккаунты и команда (облако), Сделки, Компании, Контакты, Входящие + каналы · остальное — заглушки</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{TITLES[page]}</span>
         </footer>
       </div>
 
       {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
+      {s.authStage && <AuthOverlay stage={s.authStage} />}
       <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
         ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
         : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" } }} />
@@ -509,15 +535,7 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
             <Idle primary className="h-9">Сохранить</Idle>
           </div>
         </div>
-        <div className="flex items-center justify-between px-4 py-3.5">
-          <div>
-            <div className="text-[13px] font-semibold">Команда</div>
-            <div className="text-[11.5px] text-muted-foreground">3 сотрудника · роли и права — скоро</div>
-          </div>
-          <div className="flex -space-x-1.5">
-            <Avatar n="Г" hue={42} size={26} /><Avatar n="М" hue={152} size={26} /><Avatar n="А" hue={210} size={26} />
-          </div>
-        </div>
+        <TeamLive />
       </div>
     </div>
   );

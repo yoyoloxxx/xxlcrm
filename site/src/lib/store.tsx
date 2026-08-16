@@ -4,7 +4,7 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations } from "./model";
+import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User } from "./model";
 import { uid, now, displayValue, defaultIntegrations, channelName } from "./model";
 import { ENTITIES, USERS, entityCfg, seed, DEFAULT_TEMPLATES } from "./data";
 
@@ -13,6 +13,12 @@ interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
   activeChatId: string | null;
+  users: User[];                   // команда: в демо — статичная, в облаке — участники пространства
+  mode: "local" | "cloud";         // local = демо в localStorage, cloud = общая база Supabase
+  wsId: string | null;
+  wsName: string;
+  inviteCode: string;
+  authStage: "auth" | "ws" | null; // оверлей входа/регистрации и создания/вступления в пространство
 }
 
 // ---------- адаптер персистентности (при Supabase заменяется целиком этот объект) ----------
@@ -67,22 +73,45 @@ function ensurePos(records: Rec[]) {
   }
 }
 
+const INT_KEY = "xxlcrm-ints-v1"; // интеграции живут на устройстве отдельно: данные в облаке общие, каналы личные
+function normalizeInts(raw: unknown): Integrations {
+  const ints = { ...defaultIntegrations(), ...((raw as Integrations) ?? {}) } as Integrations;
+  ints.tg.status = ints.tg.token ? "ok" : "off";
+  ints.wa.status = ints.wa.idInstance && ints.wa.apiToken ? "ok" : "off";
+  ints.max.status = ints.max.token ? "ok" : "off";
+  ints.tilda.status = ints.tilda.hookId ? "ok" : "off";
+  ints.tgUser.status = ints.tgUser.session ? "connecting" : "off";
+  ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
+  return ints;
+}
 const initial: DataState = persistence.load() ?? { ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 ensurePos(initial.records);
-const st: State = { ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null };
+const st: State = {
+  ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null,
+  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null,
+};
 
 let version = 0;
 const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
+const saveInts = () => { try { window.localStorage.setItem(INT_KEY, JSON.stringify(st.integrations)); } catch { /* живём в RAM */ } };
+// маршрут сохранения: демо — блоб в localStorage; облако — диф в Supabase (cloudHooks.save назначает cloud.ts)
+export const cloudHooks: { save?: () => void } = {};
+const dispatchSave = () => {
+  saveInts();
+  if (st.mode === "local") persistence.save(st);
+  else cloudHooks.save?.();
+};
 const emit = () => {
   version++;
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => persistence.save(st), 300);
+  saveTimer = window.setTimeout(dispatchSave, 300);
   listeners.forEach(l => l());
 };
 // Закрытие/перезагрузка вкладки не должны терять последние 300 мс изменений — сбрасываем отложенное сохранение сразу
 window.addEventListener("pagehide", () => {
-  if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; persistence.save(st); }
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; dispatchSave(); }
 });
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 export function useApp(): State { useSyncExternalStore(subscribe, () => version); return st; }
@@ -109,8 +138,9 @@ export function undo(): boolean {
 // ---------- селекторы ----------
 export const recById = (id?: string | null) => st.records.find(r => r.id === id);
 export const recordsOf = (entityId: string) => st.records.filter(r => r.entityId === entityId);
-export const userName = (id?: string) => USERS.find(u => u.id === id)?.name ?? "";
-export const userById = (id?: string) => USERS.find(u => u.id === id);
+export const userName = (id?: string) => st.users.find(u => u.id === id)?.name ?? "";
+export const userById = (id?: string) => st.users.find(u => u.id === id);
+export const allUsers = () => st.users;
 export const openTasksFor = (recordId: string) => st.tasks.filter(t => t.recordId === recordId && !t.done);
 
 export function recTitle(id?: string): string {
@@ -223,6 +253,7 @@ export const A = {
     });
   },
   resetDemo() {
+    if (st.mode !== "local") { toast("В облачном пространстве демо-сброс недоступен"); return; }
     persistence.reset();
     const fresh = seed();
     ensurePos(fresh.records);
@@ -337,5 +368,22 @@ export function handleIncoming(ext: ChatExt, name: string, channel: Channel, tex
     if (lead) toast.success("Автолид: диалог превращён в сделку", { description: recTitle(lead) });
   }
 }
+
+// ---------- мост в облако (использует cloud.ts) ----------
+export function enterCloud(
+  data: { records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
+  ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
+) {
+  Object.assign(st, data);
+  ensurePos(st.records);
+  st.users = ctx.users; st.currentUserId = ctx.meId;
+  st.mode = "cloud"; st.wsId = ctx.wsId; st.wsName = ctx.wsName; st.inviteCode = ctx.inviteCode;
+  st.drawerRecordId = null; st.activeChatId = null; st.authStage = null;
+  history.length = 0;
+  version++; listeners.forEach(l => l()); // уведомить компоненты, не планируя сохранение
+}
+export function applyRemote(fn: (s: State) => void) { fn(st); version++; listeners.forEach(l => l()); }
+export function setAuthStage(v: "auth" | "ws" | null) { mut(s => { s.authStage = v; }); }
+export function setWsMeta(name: string, invite: string) { mut(s => { s.wsName = name; s.inviteCode = invite; }); }
 
 export { ENTITIES, USERS, entityCfg, channelName };

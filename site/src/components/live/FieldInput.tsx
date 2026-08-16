@@ -1,6 +1,6 @@
 // Редактор значения поля — карточка, inline-таблица, быстрые формы
 import type { Field } from "@/lib/model";
-import { recordsOf, recTitle, USERS } from "@/lib/store";
+import { recordsOf, recTitle, allUsers } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -42,7 +42,7 @@ export function FieldInput({ field: f, value, onChange, autoFocus, onDone }: {
           <SelectTrigger autoFocus={autoFocus} className="h-9 text-[13px]"><SelectValue placeholder="—" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__none"><span className="text-muted-foreground">Не назначен</span></SelectItem>
-            {USERS.map(u => <SelectItem key={u.id} value={u.id}><UserChip id={u.id} withName /></SelectItem>)}
+            {allUsers().map(u => <SelectItem key={u.id} value={u.id}><UserChip id={u.id} withName /></SelectItem>)}
           </SelectContent>
         </Select>
       );

@@ -37,6 +37,7 @@
     "@radix-ui/react-toggle": "^1.1.18",
     "@radix-ui/react-toggle-group": "^1.1.19",
     "@radix-ui/react-tooltip": "^1.2.16",
+    "@supabase/supabase-js": "^2.112.3",
     "big-integer": "^1.6.52",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

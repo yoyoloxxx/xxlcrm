@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { EntityCfg, Field, Rec } from "@/lib/model";
 import { displayValue, fmtMoney } from "@/lib/model";
-import { A, recordsOf, recTitle, openTasksFor, dispCtx, entityCfg, USERS } from "@/lib/store";
+import { A, recordsOf, recTitle, openTasksFor, dispCtx, entityCfg, allUsers } from "@/lib/store";
 import { FieldInput } from "./FieldInput";
 import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -154,7 +154,7 @@ export function OwnerPicker({ rec }: { rec: Rec }) {
         <button className="rounded-md p-0.5 hover:bg-foreground/5"><UserChip id={rec.ownerId} withName /></button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        {USERS.map(u => (
+        {allUsers().map(u => (
           <DropdownMenuItem key={u.id} onClick={() => A.setOwner(rec.id, u.id)}><UserChip id={u.id} withName /></DropdownMenuItem>
         ))}
       </DropdownMenuContent>
