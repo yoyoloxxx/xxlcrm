@@ -200,8 +200,8 @@ export function recTitle(id?: string): string {
 }
 export const dispCtx = () => ({ recTitle, userName });
 
-function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string) {
-  st.activities.push({ id: uid("a"), recordId, ts: now(), kind, text, userId });
+function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string, editKey?: string) {
+  st.activities.push({ id: uid("a"), recordId, ts: now(), kind, text, userId, editKey });
 }
 
 // ---------- экшены ----------
@@ -215,7 +215,17 @@ export const A = {
       r.values[f.id] = value; r.updatedAt = now();
       if (JSON.stringify(old ?? "") !== JSON.stringify(value ?? "")) {
         const dv = displayValue(f, value, dispCtx());
-        pushAct(recId, "field", `${f.label}: ${dv === "" ? "очищено" : dv}`, s.currentUserId);
+        const text = `${f.label}: ${dv === "" ? "очищено" : dv}`;
+        const editKey = `field:${f.id}`;
+        // коалесинг: набор текста по буквам — одна запись в хронике, а не строка на каждое нажатие.
+        // если последнее событие — правка того же поля этой же записи тем же пользователем за последние 3 мин, обновляем его на месте
+        const last = s.activities[s.activities.length - 1];
+        if (last && last.kind === "field" && last.recordId === recId && last.editKey === editKey
+            && last.userId === s.currentUserId && now() - last.ts < 180000) {
+          last.text = text; last.ts = now();
+        } else {
+          pushAct(recId, "field", text, s.currentUserId, editKey);
+        }
       }
     });
   },

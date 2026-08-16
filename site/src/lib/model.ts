@@ -19,7 +19,7 @@ export interface Rec {
 export type TaskKind = "call" | "meet" | "todo" | "msg";
 export interface Task { id: string; title: string; kind: TaskKind; recordId?: string; ownerId: string; due: number; done: boolean; doneAt?: number }
 export type ActKind = "created" | "stage" | "field" | "comment" | "task";
-export interface Activity { id: string; recordId: string; ts: number; kind: ActKind; text: string; userId?: string }
+export interface Activity { id: string; recordId: string; ts: number; kind: ActKind; text: string; userId?: string; editKey?: string }
 export interface User { id: string; name: string; role: string; hue: number }
 
 export type Channel = "tg" | "wa" | "max" | "ig";
