@@ -13,6 +13,7 @@ import { initIntegrations } from "@/lib/integrations";
 import { cloudBoot } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
+import { PresetPicker } from "@/components/live/PresetPicker";
 import { EntIcon } from "@/components/live/icons";
 import { TasksLive } from "@/components/live/TasksLive";
 import { MyDayLive } from "@/components/live/MyDayLive";
@@ -76,6 +77,7 @@ export default function App() {
   const s = useApp();
   const [page, setPage] = useState<Page>("ent:deals");
   const [newEnt, setNewEnt] = useState(false);
+  const [presets, setPresets] = useState(false); // выбор пресета ниши
   const [setupEnt, setSetupEnt] = useState<string | null>(null); // конструктор открыт для раздела
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("xxl-shell-theme") as "dark") === "dark" ? "dark" : "light"; } catch { return "light"; }
@@ -117,7 +119,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.4</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.5</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -175,6 +177,10 @@ export default function App() {
             className="press mt-1 inline-flex h-8 items-center justify-start gap-2 rounded-md border border-dashed px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <Plus className="size-3.5" /> Новый раздел
           </button>
+          <button onClick={() => setPresets(true)} title="Готовая настройка под нишу — в один клик"
+            className="press inline-flex h-8 items-center justify-start gap-2 rounded-md px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.04] hover:text-foreground">
+            <Sparkles className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Шаблон ниши
+          </button>
         </nav>
 
         <div className="mt-auto border-t px-3 py-2.5">
@@ -222,13 +228,13 @@ export default function App() {
           {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
-          {page === "dashboard" && <Dashboard />}
+          {page === "dashboard" && <Dashboard onPresets={() => setPresets(true)} />}
           {page === "automations" && <AutomationsLive />}
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.4 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.5 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -236,6 +242,7 @@ export default function App() {
       {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
       {s.authStage && <AuthOverlay stage={s.authStage} />}
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
+      <PresetPicker open={presets} onOpenChange={setPresets} hasData={s.records.length > 0} onApplied={() => setPage("ent:deals")} />
       {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
       <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
         ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
@@ -353,7 +360,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   );
 }
 
-function Dashboard() {
+function Dashboard({ onPresets }: { onPresets?: () => void }) {
   useApp(); // живая подписка на стор
   const s = getState();
   const pipelines = allEntities().filter(e => (e.stages?.length ?? 0) > 0);
@@ -375,13 +382,22 @@ function Dashboard() {
               ? "Дашборд посчитает воронку, суммы и источники автоматически — по вашим настоящим данным, без выдуманных цифр."
               : "Создайте раздел с этапами (воронку) — и здесь появится живая сводка."}
           </p>
-          {primary && (
-            <button
-              onClick={() => { const id = A.createRecord(primary.id, {}); A.openRecord(id); }}
-              className="press mt-4 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[12.5px] font-medium text-primary-foreground transition-opacity hover:opacity-90">
-              <Plus className="size-3.5" /> {primary.name}
-            </button>
-          )}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {onPresets && (
+              <button
+                onClick={onPresets}
+                className="press inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3.5 text-[12.5px] font-medium text-primary-foreground transition-opacity hover:opacity-90">
+                <Sparkles className="size-3.5" /> Выбрать шаблон ниши
+              </button>
+            )}
+            {primary && (
+              <button
+                onClick={() => { const id = A.createRecord(primary.id, {}); A.openRecord(id); }}
+                className="press inline-flex h-9 items-center gap-1.5 rounded-md border px-3.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
+                <Plus className="size-3.5" /> {primary.name} вручную
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );

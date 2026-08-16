@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule } from "./model";
 import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
+import { presetById, buildPresetData } from "./presets";
 
 interface DataState { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
@@ -480,6 +481,26 @@ export const A = {
   },
   entPatch(id: string, patch: Partial<Pick<EntityCfg, "name" | "namePlural" | "icon">>) {
     mut(s => { const e = s.entities.find(x => x.id === id); if (e) Object.assign(e, patch); });
+  },
+  // применить пресет ниши: разделы + воронка + автоматизации + демо-данные одним нажатием.
+  // Заменяет структуру и записи целиком (в облаке дифф-сейв удалит старые и запишет новые). Обратимо через undo.
+  applyPreset(presetId: string): boolean {
+    const p = presetById(presetId);
+    if (!p) return false;
+    const data = buildPresetData(p);
+    pushHistory();
+    mut(s => {
+      s.entities = data.entities;
+      s.automations = data.automations;
+      s.records = data.records;
+      s.activities = data.activities;
+      s.tasks = data.tasks;
+      s.chats = data.chats;
+      s.drawerRecordId = null;
+      s.activeChatId = null;
+    });
+    toast.success(`Шаблон «${p.label}» применён`, { description: "Разделы, воронка, автоматизации и примеры настроены — можно отменить (Ctrl+Z)" });
+    return true;
   },
   entToggleStages(id: string, on: boolean) {
     mut(s => {
