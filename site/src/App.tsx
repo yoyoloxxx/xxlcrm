@@ -3,7 +3,7 @@
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
 import { useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -17,9 +17,14 @@ import { EntIcon } from "@/components/live/icons";
 import { TasksLive } from "@/components/live/TasksLive";
 import { MyDayLive } from "@/components/live/MyDayLive";
 import { ensureBirthdayTasks } from "@/lib/bday";
+import { initAutomations } from "@/lib/automations";
+import { AutomationsLive } from "@/components/live/AutomationsLive";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { Rec } from "@/lib/model";
+import { DAY } from "@/lib/model";
 import {
   Bell, Calendar, Copy, LogIn,
-  Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
+  Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks,
   Moon, Package, PanelLeft, Plus,
   Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap,
 } from "lucide-react";
@@ -80,11 +85,12 @@ export default function App() {
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
   useEffect(() => {
-    initIntegrations(); void cloudBoot(); // каналы + вход в облако, если сессия сохранена
+    initIntegrations(); void cloudBoot(); initAutomations(); // каналы + облако + правила «когда → тогда»
     const t = window.setTimeout(ensureBirthdayTasks, 1500); // напоминания «поздравить» — после загрузки данных
     const iv = window.setInterval(ensureBirthdayTasks, 3600000);
     return () => { clearTimeout(t); clearInterval(iv); };
   }, []);
+  useEffect(() => { if (s.nav) setPage(s.nav.page); }, [s.nav?.tick]); // «открыть диалог» из карточки
   const entId = page.startsWith("ent:") ? page.slice(4) : null;
   useEffect(() => {
     if (entId && !s.entities.some(e => e.id === entId)) setPage(s.entities.length ? "ent:" + s.entities[0].id : "myday");
@@ -111,7 +117,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.8</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -217,12 +223,12 @@ export default function App() {
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
           {page === "dashboard" && <Dashboard />}
-          {page === "automations" && <Automations />}
+          {page === "automations" && <AutomationsLive />}
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.8 · живое: всё основное — разделы и конструктор, Входящие, Задачи, Мой день, команда · заглушки: Дашборд, Автоматизации</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9 · живое: всё, кроме Дашборда — автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -258,7 +264,30 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   const e = entityCfg(id);
   const hasStages = !!e.stages?.length;
   const [view, setView] = useState<ViewId>(hasStages ? "kanban" : "table");
+  const [q, setQ] = useState("");
+  const [mine, setMine] = useState(false);
+  const [seg, setSeg] = useState("all");
   const count = recordsOf(id).length;
+  const lastAct = (rid: string) => {
+    let last = recById(rid)?.updatedAt ?? 0;
+    for (const a of getState().activities) if (a.recordId === rid && a.ts > last) last = a.ts;
+    return last;
+  };
+  const filterOn = !!q.trim() || mine || seg !== "all";
+  const pred = (r: Rec): boolean => {
+    if (mine && r.ownerId !== getState().currentUserId) return false;
+    if (q.trim()) {
+      const needle = q.trim().toLowerCase();
+      if (!recTitle(r.id).toLowerCase().includes(needle) && !JSON.stringify(r.values).toLowerCase().includes(needle)) return false;
+    }
+    const stg = e.stages?.find(x => x.id === r.stageId);
+    if (seg === "active") return !!stg && stg.kind === "open";
+    if (seg === "won") return !!stg && stg.kind === "won";
+    if (seg === "quiet") return Date.now() - lastAct(r.id) > 60 * DAY;
+    if (seg === "notask") return (!stg || stg.kind === "open") && !getState().tasks.some(t => t.recordId === r.id && !t.done);
+    return true;
+  };
+  const shown = filterOn ? recordsOf(id).filter(pred).length : count;
   const tabs: [ViewId, string, React.ElementType][] = hasStages
     ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ...(id === "deals" ? [["calendar", "Календарь", Calendar] as [ViewId, string, React.ElementType]] : [])]
     : [["table", "Таблица", Table2]];
@@ -266,7 +295,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-5 pt-4">
-        <ScreenHead title={e.namePlural} sub={`${count} записей · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
+        <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} записей`} · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
           <button onClick={openSetup}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
@@ -288,14 +317,36 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
             ))}
           </div>
           <div className="flex items-center gap-1.5 pb-1.5">
-            <Idle title="Фильтры — следующая итерация"><ListFilter className="size-3" /> Фильтры</Idle>
-            <Idle title="Фильтр по ответственному — следующая итерация">Мои</Idle>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+              <input value={q} onChange={ev => setQ(ev.target.value)} placeholder="Поиск в разделе…"
+                className="h-7 w-40 rounded-md border bg-card pl-7 pr-2 text-[12px] outline-none transition-colors focus:border-ring" />
+            </div>
+            <Select value={seg} onValueChange={setSeg}>
+              <SelectTrigger className={cn("h-7 w-[132px] text-[12px]", seg !== "all" && "border-transparent font-medium")}
+                style={seg !== "all" ? { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" } : undefined}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Все</SelectItem>
+                {hasStages && <SelectItem value="active">Активные</SelectItem>}
+                {hasStages && <SelectItem value="won">Успешные</SelectItem>}
+                <SelectItem value="quiet">Спящие 60+ дн.</SelectItem>
+                <SelectItem value="notask">Без задачи</SelectItem>
+              </SelectContent>
+            </Select>
+            <button onClick={() => setMine(m => !m)} title="Только мои записи"
+              className={cn("press inline-flex h-7 items-center rounded-md border px-2.5 text-[12px] transition-colors duration-150",
+                mine ? "border-transparent font-medium" : "text-muted-foreground hover:border-foreground/25 hover:text-foreground")}
+              style={mine ? { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" } : undefined}>
+              Мои
+            </button>
           </div>
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {activeView === "kanban" && hasStages && <KanbanLive entity={e} />}
-        {activeView === "table" && <TableLive entity={e} />}
+        {activeView === "kanban" && hasStages && <KanbanLive entity={e} filter={filterOn ? pred : undefined} />}
+        {activeView === "table" && <TableLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "calendar" && <DealsCalendar />}
       </div>
     </div>
@@ -366,40 +417,6 @@ function Dashboard() {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Automations() {
-  const rules = [
-    { on: true, n: "Новая сделка → связаться за час", d: "Создана запись в «Сделки» → задача «Связаться с клиентом», звонок", fired: "38" },
-    { on: true, n: "«Переговоры» 3 дня без движения", d: "Запись застряла на стадии → задача ответственному + уведомление РОПу", fired: "12" },
-    { on: false, n: "Оплата получена → поздравить команду", d: "Стадия «Оплачено» → уведомление в ленту", fired: "7" },
-    { on: true, n: "Заявка с Tilda → в воронку", d: "Вебхук формы → запись в «Сделки», источник «Сайт»", fired: "26" },
-  ];
-  return (
-    <div className="cascade mx-auto max-w-3xl px-5 py-6">
-      <ScreenHead title="Автоматизации" sub="правила «когда → тогда»: система делает рутину сама">
-        <Idle primary><Plus className="size-3.5" /> Правило</Idle>
-      </ScreenHead>
-      <div className="mt-5 divide-y rounded-lg border bg-card">
-        {rules.map((r, i) => (
-          <div key={i} className="flex items-start gap-3 px-4 py-3">
-            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md" style={{ background: r.on ? "hsl(var(--brass) / 0.18)" : "hsl(var(--muted))" }}>
-              <Zap className="size-3.5" style={{ color: r.on ? "var(--brass-ink)" : "hsl(var(--muted-foreground))" }} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold leading-snug">{r.n}</div>
-              <div className="mt-0.5 text-[12px] leading-snug text-muted-foreground">{r.d}</div>
-              <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">сработала {r.fired} раз</div>
-            </div>
-            <Idle className={cn("h-[22px] w-10 rounded-full border-0 p-0.5", r.on ? "justify-end" : "justify-start")} title="В обёртке переключатели неактивны">
-              <span className="block h-[17px] w-[17px] rounded-full bg-card shadow-sm" style={{ outline: "1px solid hsl(var(--border))" }} />
-            </Idle>
-          </div>
-        ))}
-      </div>
-      <p className="mt-3 text-[11.5px] text-muted-foreground">Триггеры: создание записи, смена стадии, застревание, входящее сообщение, вебхук. Действия: задача, уведомление, смена поля, сообщение клиенту, AI.</p>
     </div>
   );
 }

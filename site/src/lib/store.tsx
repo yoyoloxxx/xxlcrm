@@ -4,11 +4,11 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage } from "./model";
-import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, PALETTE } from "./model";
+import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule } from "./model";
+import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
 
-interface DataState { entities: EntityCfg[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
+interface DataState { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
@@ -20,6 +20,7 @@ interface State extends DataState {
   inviteCode: string;
   authStage: "auth" | "ws" | null; // оверлей входа/регистрации и создания/вступления в пространство
   pendingDraft: { chatId: string; text: string } | null; // заготовка ответа, ждущая открытия Входящих
+  nav: { page: string; tick: number } | null; // просьба сменить экран (из карточки → Входящие)
 }
 
 // ---------- адаптер персистентности (при Supabase заменяется целиком этот объект) ----------
@@ -42,6 +43,7 @@ const persistence = {
       ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
       return {
         entities: Array.isArray(d.entities) && d.entities.length ? d.entities : clone(ENTITIES), // миграция v2→v3
+        automations: Array.isArray(d.automations) ? d.automations : defaultRules(),
         records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [],
         chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
         replyTemplates: Array.isArray(d.replyTemplates) && d.replyTemplates.length ? d.replyTemplates : DEFAULT_TEMPLATES,
@@ -52,7 +54,7 @@ const persistence = {
   save(s: DataState) {
     try {
       window.localStorage.setItem(LS_KEY, JSON.stringify({
-        v: 3, entities: s.entities, records: s.records, tasks: s.tasks, activities: s.activities,
+        v: 3, entities: s.entities, automations: s.automations, records: s.records, tasks: s.tasks, activities: s.activities,
         chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
       }));
     } catch { /* памяти нет — живём в RAM */ }
@@ -94,13 +96,13 @@ export function ensureBdayField(entities: EntityCfg[]) {
     c.fields.push({ id: "bday", label: "День рождения", type: "date", inTable: false });
   }
 }
-const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 ensurePos(initial.records);
 const st: State = {
   ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null,
-  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null, pendingDraft: null,
+  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null, pendingDraft: null, nav: null,
 };
 
 let version = 0;
@@ -109,6 +111,8 @@ let saveTimer: number | undefined;
 const saveInts = () => { try { window.localStorage.setItem(INT_KEY, JSON.stringify(st.integrations)); } catch { /* живём в RAM */ } };
 // маршрут сохранения: демо — блоб в localStorage; облако — диф в Supabase (cloudHooks.save назначает cloud.ts)
 export const cloudHooks: { save?: () => void } = {};
+// события для движка автоматизаций (устанавливает automations.ts)
+export const ruleHooks: { created?: (recId: string) => void; stage?: (recId: string, stageId: string) => void } = {};
 const dispatchSave = () => {
   saveInts();
   if (st.mode === "local") persistence.save(st);
@@ -155,6 +159,35 @@ export const userName = (id?: string) => st.users.find(u => u.id === id)?.name ?
 export const userById = (id?: string) => st.users.find(u => u.id === id);
 export const allUsers = () => st.users;
 export const openTasksFor = (recordId: string) => st.tasks.filter(t => t.recordId === recordId && !t.done);
+const phoneDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+// один человек = одна карточка: ищем запись с таким телефоном в любом разделе (контакты — в приоритете)
+export function findRecordByPhone(phoneRaw?: string, preferEntity = "contacts"): Rec | undefined {
+  const d = phoneDigits(phoneRaw);
+  if (d.length < 7) return undefined;
+  const match = (r: Rec) => {
+    const e = st.entities.find(x => x.id === r.entityId);
+    return !!e?.fields.some(f => f.type === "phone" && phoneDigits(r.values[f.id]) === d);
+  };
+  return st.records.find(r => r.entityId === preferEntity && match(r)) ?? st.records.find(match);
+}
+// всё связанное с записью: записи, ссылающиеся на неё связью, и её диалоги
+export function relatedOf(recId: string): { records: Rec[]; chats: Chat[] } {
+  const records = st.records.filter(r => {
+    if (r.id === recId) return false;
+    const e = st.entities.find(x => x.id === r.entityId);
+    return !!e?.fields.some(f => f.type === "relation" && r.values[f.id] === recId);
+  });
+  const rec = recById(recId);
+  const phoneOf = () => {
+    const e = rec && st.entities.find(x => x.id === rec.entityId);
+    const pf = e?.fields.find(f => f.type === "phone");
+    return pf && rec ? phoneDigits(rec.values[pf.id]) : "";
+  };
+  const d = phoneOf();
+  const ids = new Set([recId, ...records.map(r => r.id)]);
+  const chats = st.chats.filter(c => (c.recordId && ids.has(c.recordId)) || (d.length >= 7 && phoneDigits(c.phone) === d));
+  return { records, chats };
+}
 
 export function recTitle(id?: string): string {
   const r = recById(id ?? undefined); if (!r) return "";
@@ -221,6 +254,7 @@ export const A = {
       if (changedStage) {
         r.stageAt = now();
         pushAct(recId, "stage", `Стадия: ${stage.label}`, s.currentUserId);
+        queueMicrotask(() => ruleHooks.stage?.(recId, stageId)); // после коммита мутации
       }
     });
   },
@@ -239,6 +273,7 @@ export const A = {
       s.records.push(r); id = r.id;
       pushAct(id, "created", "Запись создана", s.currentUserId);
     });
+    ruleHooks.created?.(id);
     return id;
   },
   deleteRecord(recId: string) {
@@ -258,13 +293,14 @@ export const A = {
       if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId);
     });
   },
-  taskAddAt(id: string | null, title: string, kind: Task["kind"], dueTs: number, recId?: string) {
-    if (id && st.tasks.some(t => t.id === id)) return; // напоминание уже есть (в т.ч. выполненное)
+  taskAddAt(id: string | null, title: string, kind: Task["kind"], dueTs: number, recId?: string): boolean {
+    if (id && st.tasks.some(t => t.id === id)) return false; // напоминание уже есть (в т.ч. выполненное)
     mut(s => {
       const r = recId ? s.records.find(x => x.id === recId) : undefined;
       s.tasks.push({ id: id ?? uid("t"), title, kind, recordId: recId, ownerId: r?.ownerId ?? s.currentUserId, due: dueTs, done: false });
       if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId);
     });
+    return true;
   },
   taskDelete(taskId: string) {
     mut(s => { s.tasks = s.tasks.filter(t => t.id !== taskId); });
@@ -320,9 +356,12 @@ export const A = {
     let id = "";
     mut(s => {
       const c: Chat = { id: uid("c"), name, phone, channel, unread: 1, msgs: [{ id: uid("m"), ts: now(), out: false, text }], ext };
+      const known = findRecordByPhone(phone); // дедуп: этот человек уже есть в базе?
+      if (known) c.recordId = known.id;
       s.chats.unshift(c); id = c.id;
     });
-    toast(`Новый диалог: ${name}`, { description: text.slice(0, 64) });
+    const linked = st.chats.find(x => x.id === id)?.recordId;
+    toast(`Новый диалог: ${name}`, { description: linked ? `Узнали клиента: ${recTitle(linked)}` : text.slice(0, 64) });
     return id;
   },
   // исходящее, отправленное С ТЕЛЕФОНА (личный аккаунт): показываем в ленте, не трогая счётчики
@@ -352,7 +391,27 @@ export const A = {
     const c = st.chats.find(x => x.id === chatId);
     if (!c) return null;
     const e = entityCfg("deals");
-    const values: Record<string, unknown> = { title: c.name }; // телефон уйдёт в хронологию сделки
+    // дедуп: известный клиент? (диалог уже привязан к карточке-человеку или совпал телефон)
+    const linkedRec = c.recordId ? recById(c.recordId) : undefined;
+    const person = (linkedRec && !entityCfg(linkedRec.entityId).stages?.length ? linkedRec : undefined) ?? findRecordByPhone(c.phone);
+    const contactF = e.fields.find(f => f.type === "relation" && person && f.relationTo === person.entityId);
+    if (person) {
+      const openDeal = st.records.find(r =>
+        r.entityId === "deals" &&
+        e.fields.some(f => f.type === "relation" && r.values[f.id] === person.id) &&
+        e.stages?.find(x => x.id === r.stageId)?.kind === "open");
+      if (openDeal) {
+        mut(s => {
+          const cc = s.chats.find(x => x.id === chatId)!;
+          cc.recordId = openDeal.id;
+          pushAct(openDeal.id, "comment", `Клиент снова написал в ${channelName(c.channel)} — диалог привязан к текущей сделке`);
+        });
+        toast.success("Узнали клиента — подтянута его текущая сделка", { description: recTitle(openDeal.id) });
+        return openDeal.id;
+      }
+    }
+    const values: Record<string, unknown> = { title: person ? recTitle(person.id) : c.name };
+    if (person && contactF) values[contactF.id] = person.id;
     const srcField = e.fields.find(f => f.id === "source");
     const want = c.channel === "wa" ? /whatsapp/i : c.channel === "tg" ? /telegram/i : c.channel === "max" ? /max/i : /instagram|сайт/i;
     const srcOpt = srcField?.options?.find(o => want.test(o.label)) ?? srcField?.options?.find(o => /сайт/i.test(o.label));
@@ -361,9 +420,9 @@ export const A = {
     mut(s => {
       const cc = s.chats.find(x => x.id === chatId)!;
       cc.recordId = id;
-      pushAct(id, "comment", `Сделка создана из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}`);
+      pushAct(id, "comment", `Сделка создана из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}${person ? ` · клиент: ${recTitle(person.id)}` : ""}`);
     });
-    toast.success("Сделка создана и связана с диалогом");
+    toast.success(person ? "Сделка создана и привязана к клиенту" : "Сделка создана и связана с диалогом");
     return id;
   },
 
@@ -373,6 +432,20 @@ export const A = {
   tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
   tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
   tplDelete(id: string) { mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); },
+  // ---------- автоматизации ----------
+  ruleAdd(rule: Omit<Rule, "id" | "fired">): string {
+    const id = uid("rule");
+    mut(s => s.automations.push({ ...rule, id, fired: 0 }));
+    return id;
+  },
+  ruleUpdate(id: string, patch: Partial<Rule>) {
+    mut(s => { const r = s.automations.find(x => x.id === id); if (r) Object.assign(r, patch); });
+  },
+  ruleToggle(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.enabled = !r.enabled; }); },
+  ruleDelete(id: string) { mut(s => { s.automations = s.automations.filter(x => x.id !== id); }); },
+  ruleFired(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.fired++; }); },
+  goto(page: string) { mut(s => { s.nav = { page, tick: (s.nav?.tick ?? 0) + 1 }; }); },
+
   // ---------- конструктор разделов ----------
   entAdd(name: string, withPipeline: boolean): string {
     const id = uid("e");
@@ -500,6 +573,18 @@ export const A = {
       }
     }
     const dealsCfg = entityCfg("deals");
+    // дедуп: у клиента уже есть открытая сделка → заявка прикрепляется к ней
+    if (contactId) {
+      const openDeal = st.records.find(r =>
+        r.entityId === "deals" &&
+        dealsCfg.fields.some(f => f.type === "relation" && r.values[f.id] === contactId) &&
+        dealsCfg.stages?.find(x => x.id === r.stageId)?.kind === "open");
+      if (openDeal) {
+        mut(() => pushAct(openDeal.id, "comment", `Повторная заявка с Tilda: ${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ")}`));
+        toast.success("Повторная заявка — приложена к текущей сделке клиента", { description: recTitle(openDeal.id) });
+        return;
+      }
+    }
     const dealValues: Record<string, unknown> = { title: name || "Заявка с Tilda", source: dealsCfg.fields.find(f => f.id === "source")?.options?.find(o => /сайт/i.test(o.label))?.id };
     const contactF = dealsCfg.fields.find(f => f.type === "relation" && f.relationTo === "contacts");
     if (contactF && contactId) dealValues[contactF.id] = contactId;
@@ -546,7 +631,7 @@ export function handleIncoming(ext: ChatExt, name: string, channel: Channel, tex
 
 // ---------- мост в облако (использует cloud.ts) ----------
 export function enterCloud(
-  data: { entities: EntityCfg[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
+  data: { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
   ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
 ) {
   Object.assign(st, data);

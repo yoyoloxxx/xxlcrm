@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { IntStatus } from "@/lib/model";
 import { useApp, A } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync } from "@/lib/tg-user";
+import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -38,6 +38,7 @@ function TgUserCard() {
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
   const busy = t.status === "connecting";
+  const hasAppKeys = !!TG_APP.apiId; // ключи приложения вшиты — пользователю нужен только номер
 
   return (
     <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
@@ -51,16 +52,24 @@ function TgUserCard() {
         <>
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
             Ваш обычный Telegram — вход как в приложении: диалоги рабочего номера появятся во «Входящих», ответы уходят от вашего имени.
-            Один раз возьмите <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools.
+            {!hasAppKeys && <> Один раз возьмите <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools.</>}
           </p>
           {t.error && <p className="mt-1 text-[11.5px] text-destructive">{t.error}</p>}
-          <div className="mt-2 grid gap-2 sm:grid-cols-[96px_1fr_150px_auto]">
-            <Input className="h-9 text-[12.5px]" placeholder="api_id" value={apiId} onChange={e => setApiId(e.target.value)} disabled={busy} />
-            <Input className="h-9 text-[12.5px]" type="password" placeholder="api_hash" value={apiHash} onChange={e => setApiHash(e.target.value)} disabled={busy} />
-            <Input className="h-9 text-[12.5px]" placeholder="+79161234567" value={phone} onChange={e => setPhone(e.target.value)} disabled={busy} />
-            <Button className="h-9" disabled={busy || !apiId.trim() || !apiHash.trim() || phone.trim().length < 10}
-              onClick={() => tguStartLogin(apiId, apiHash, phone)}>{busy ? "Подключаю…" : "Получить код"}</Button>
-          </div>
+          {hasAppKeys ? (
+            <div className="mt-2 flex gap-2">
+              <Input className="h-9 w-44 text-[12.5px]" placeholder="+79161234567" value={phone} onChange={e => setPhone(e.target.value)} disabled={busy} />
+              <Button className="h-9" disabled={busy || phone.trim().length < 10}
+                onClick={() => tguStartLogin("", "", phone)}>{busy ? "Подключаю…" : "Получить код"}</Button>
+            </div>
+          ) : (
+            <div className="mt-2 grid gap-2 sm:grid-cols-[96px_1fr_150px_auto]">
+              <Input className="h-9 text-[12.5px]" placeholder="api_id" value={apiId} onChange={e => setApiId(e.target.value)} disabled={busy} />
+              <Input className="h-9 text-[12.5px]" type="password" placeholder="api_hash" value={apiHash} onChange={e => setApiHash(e.target.value)} disabled={busy} />
+              <Input className="h-9 text-[12.5px]" placeholder="+79161234567" value={phone} onChange={e => setPhone(e.target.value)} disabled={busy} />
+              <Button className="h-9" disabled={busy || !apiId.trim() || !apiHash.trim() || phone.trim().length < 10}
+                onClick={() => tguStartLogin(apiId, apiHash, phone)}>{busy ? "Подключаю…" : "Получить код"}</Button>
+            </div>
+          )}
           <p className="mt-1.5 text-[10.5px] text-muted-foreground">Сессия хранится только в этом браузере — подключайте на своём компьютере.</p>
         </>
       )}
@@ -92,6 +101,9 @@ function TgUserCard() {
             <Button className="h-9" disabled={!pw} onClick={() => { tguSubmitPassword(pw); setPw(""); }}>Войти</Button>
             <Button variant="outline" className="h-9" onClick={() => { setPw(""); tguCancelLogin(); }}>Отмена</Button>
           </div>
+          <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground">
+            Не проходит? Это ограничение Telegram на вход с паролём из браузера. Обход за минуту: в Telegram → Настройки → Конфиденциальность → Облачный пароль — снимите его, войдите здесь по коду, затем включите обратно. Ваша сессия сохранится.
+          </p>
         </>
       )}
 

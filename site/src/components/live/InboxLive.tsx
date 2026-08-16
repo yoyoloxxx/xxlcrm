@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Chat } from "@/lib/model";
 import { relTime, channelName } from "@/lib/model";
-import { useApp, A, recById, recTitle } from "@/lib/store";
+import { useApp, A, recById, recTitle, entityCfg } from "@/lib/store";
 import { sendChatMessage } from "@/lib/integrations";
 import { fillTemplate } from "@/lib/fill";
 import { Button } from "@/components/ui/button";
@@ -104,11 +104,12 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
               </div>
             </div>
             <div className="ml-auto flex items-center gap-1.5">
-              {linked ? (
+              {linked && (
                 <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12.5px]" onClick={() => A.openRecord(linked.id)}>
                   {recTitle(linked.id)} <ArrowUpRight className="size-3.5" />
                 </Button>
-              ) : (
+              )}
+              {(!linked || !entityCfg(linked.entityId).stages?.length) && (
                 <Button size="sm" className="h-8 gap-1.5 text-[12.5px]" onClick={() => A.chatCreateLead(chat.id)}>
                   <UserPlus className="size-3.5" /> Создать сделку
                 </Button>

@@ -7,13 +7,13 @@ import { Money, UserChip } from "./bits";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function KanbanLive({ entity: e }: { entity: EntityCfg }) {
+export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: (r: import("@/lib/model").Rec) => boolean }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [slot, setSlot] = useState<{ stage: string; index: number } | null>(null);
   const [quickCol, setQuickCol] = useState<string | null>(null);
   const [quick, setQuick] = useState("");
 
-  const records = recordsOf(e.id);
+  const records = filter ? recordsOf(e.id).filter(filter) : recordsOf(e.id);
   const moneyField = e.fields.find(f => f.type === "money");
   const subtitleField = e.fields.find(f => f.type === "relation");
 

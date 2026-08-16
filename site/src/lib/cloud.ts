@@ -3,8 +3,8 @@
 // подписывается на cloudHooks.save и превращает изменения стора в точечные upsert/delete.
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
-import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg } from "./model";
-import { uid } from "./model";
+import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule } from "./model";
+import { uid, defaultRules } from "./model";
 import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { toast } from "sonner";
@@ -13,7 +13,8 @@ let wsId: string | null = null;
 let channel: RealtimeChannel | null = null;
 
 // снимки последнего сохранённого состояния: id → канонический JSON модели (для диффа и гашения эха)
-let entitiesSnap = ""; // канон структуры разделов (ws_config)
+let cfgSnap = ""; // канон структуры и правил (ws_config: entities + automations)
+let cfgHasAutomations = true; // колонка automations может ещё не существовать — деградируем мягко
 const snap = {
   records: new Map<string, string>(),
   tasks: new Map<string, string>(),
@@ -133,14 +134,16 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
     supa.from("reply_templates").select("*").eq("workspace_id", id),
     supa.from("members").select("*").eq("workspace_id", id),
     supa.from("workspaces").select("name, invite_code").eq("id", id).single(),
-    supa.from("ws_config").select("entities").eq("workspace_id", id).maybeSingle(),
+    supa.from("ws_config").select("*").eq("workspace_id", id).maybeSingle(),
   ]);
   const err = recs.error ?? tasks.error ?? acts.error ?? chats.error ?? tpls.error ?? mems.error ?? wss.error;
   if (err) { toast.error("Не удалось загрузить пространство: " + err.message.slice(0, 100)); return; }
 
   const cfgEnts = (cfg.data?.entities as EntityCfg[] | null) ?? null;
+  const cfgAuto = ((cfg.data as Row | null)?.automations as Rule[] | null) ?? null;
   const data = {
     entities: cfgEnts?.length ? cfgEnts : clone(ENTITIES),
+    automations: cfgAuto ?? defaultRules(),
     records: (recs.data ?? []).map(M.records.fromRow),
     tasks: (tasks.data ?? []).map(M.tasks.fromRow),
     activities: (acts.data ?? []).map(M.activities.fromRow).sort((a, b) => a.ts - b.ts),
@@ -152,8 +155,8 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   enterCloud(data, { wsId: id, wsName: String(wss.data?.name ?? "Пространство"), inviteCode: String(wss.data?.invite_code ?? ""), users, meId });
 
   // снимки для диффа
-  entitiesSnap = canon(data.entities);
-  if (!cfgEnts?.length) await supa.from("ws_config").upsert({ workspace_id: id, entities: data.entities, updated_at: Date.now() });
+  cfgSnap = canon({ e: data.entities, a: data.automations });
+  if (!cfgEnts?.length || !cfgAuto) await saveCfg(id, data.entities, data.automations);
   snap.records = new Map(data.records.map(r => [r.id, canon(r)]));
   snap.tasks = new Map(data.tasks.map(t => [t.id, canon(t)]));
   snap.activities = new Map(data.activities.map(a => [a.id, canon(a)]));
@@ -163,6 +166,18 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   cloudHooks.save = scheduleSave;
   subscribeRealtime(id);
   toast.success(`Облако подключено: ${wss.data?.name}`, { description: "Данные общие для команды и синхронизируются сами" });
+}
+
+// сохранить конфиг пространства; если колонки automations ещё нет в базе — сохраняем без неё
+async function saveCfg(id: string, entities: EntityCfg[], automations: Rule[]): Promise<void> {
+  if (cfgHasAutomations) {
+    const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, automations, updated_at: Date.now() });
+    if (!error) return;
+    if (/automations/i.test(error.message)) cfgHasAutomations = false; // колонка не создана — падаем на entities-only
+    else throw new Error("ws_config: " + error.message);
+  }
+  const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, updated_at: Date.now() });
+  if (error) throw new Error("ws_config: " + error.message);
 }
 
 // ---------- сохранение: дифф → upsert/delete ----------
@@ -177,11 +192,10 @@ async function doSave(): Promise<void> {
   saving = true;
   try {
     const st = getState();
-    const entJ = canon(st.entities);
-    if (entJ !== entitiesSnap) {
-      const { error } = await supa.from("ws_config").upsert({ workspace_id: wsId, entities: st.entities, updated_at: Date.now() });
-      if (error) throw new Error("ws_config: " + error.message);
-      entitiesSnap = entJ;
+    const cfgJ = canon({ e: st.entities, a: st.automations });
+    if (cfgJ !== cfgSnap) {
+      await saveCfg(wsId, st.entities, st.automations);
+      cfgSnap = cfgJ;
     }
     const collections: { table: keyof typeof snap; items: { id: string }[]; toRow: (x: never) => Row }[] = [
       { table: "records", items: st.records, toRow: M.records.toRow as (x: never) => Row },
@@ -228,13 +242,15 @@ function subscribeRealtime(id: string): void {
   }
   channel.on("postgres_changes", { event: "*", schema: "public", table: "members", filter: `workspace_id=eq.${id}` }, () => { void refreshMembers(); });
   channel.on("postgres_changes", { event: "*", schema: "public", table: "ws_config", filter: `workspace_id=eq.${id}` }, payload => {
-    const inc = ((payload.new as Row | null)?.entities as EntityCfg[] | undefined) ?? undefined;
-    if (!inc?.length) return;
-    const j = canon(inc);
-    if (j === entitiesSnap) return; // эхо
-    entitiesSnap = j;
-    applyRemote(s => { s.entities = inc; });
-    toast("Структура разделов обновлена коллегой");
+    const row = payload.new as Row | null;
+    const incE = (row?.entities as EntityCfg[] | undefined) ?? undefined;
+    if (!incE?.length) return;
+    const incA = (row?.automations as Rule[] | undefined) ?? getState().automations;
+    const j = canon({ e: incE, a: incA });
+    if (j === cfgSnap) return; // эхо
+    cfgSnap = j;
+    applyRemote(s => { s.entities = incE; s.automations = incA; });
+    toast("Структура и правила обновлены коллегой");
   });
   channel.subscribe();
 }

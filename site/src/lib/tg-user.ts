@@ -9,6 +9,11 @@ import bigInt from "big-integer";
 import { getState, A, handleIncoming } from "./store";
 import { toast } from "sonner";
 
+// Ключи ПРИЛОЖЕНИЯ XXLcrm (как у официального Telegram Web): владелец продукта получает их один раз
+// на my.telegram.org, и тогда пользователи входят только по номеру и коду — без своих api_id/api_hash.
+// Пока пусто — форма просит личные ключи (или временные, см. подсказку в настройках).
+export const TG_APP = { apiId: "", apiHash: "" };
+
 const tgu = () => getState().integrations.tgUser;
 const patch = (fn: (t: ReturnType<typeof tgu>) => void) => A.intPatch(i => fn(i.tgUser));
 
@@ -23,10 +28,14 @@ const ruErr = (raw: unknown): string => {
   const m = String((raw as Error)?.message ?? raw ?? "");
   if (m.includes("PHONE_CODE_INVALID") || m.includes("PHONE_CODE_EMPTY")) return "Неверный код — проверьте и попробуйте ещё раз";
   if (m.includes("SESSION_PASSWORD_NEEDED")) return "Нужен облачный пароль (двухэтапная проверка)";
-  if (m.includes("PASSWORD_HASH_INVALID") || m.includes("PASSWORD")) return "Неверный облачный пароль";
+  if (m.includes("Bytes or str") || m.includes("computeCheck") || m.includes("SRP") || m.includes("getByteArray"))
+    return "Вход с облачным паролём из браузера сейчас не проходит (ограничение Telegram). Обход: в Telegram → Настройки → Конфиденциальность → Облачный пароль — временно снимите его, войдите здесь по коду, затем включите обратно. Сессия сохранится.";
+  if (m.includes("PASSWORD_HASH_INVALID")) return "Неверный облачный пароль";
+  if (m.includes("PASSWORD")) return "Не удалось проверить облачный пароль. Обход: временно снимите облачный пароль в Telegram, войдите по коду, включите обратно.";
   if (m.includes("PHONE_NUMBER_INVALID")) return "Неверный номер — формат +79161234567";
   if (m.includes("PHONE_NUMBER_BANNED")) return "Этот номер заблокирован Telegram";
   if (m.includes("FLOOD")) return "Слишком много попыток — Telegram просит подождать";
+  if (m.includes("API_ID_PUBLISHED")) return "Эти публичные ключи сейчас перегружены у Telegram — нужны свои (my.telegram.org с телефона через мобильный интернет)";
   if (m.includes("API_ID") || m.includes("API_HASH")) return "Неверные api_id / api_hash — проверьте на my.telegram.org";
   if (m.includes("AUTH_KEY") || m.includes("SESSION_REVOKED") || m.includes("UNAUTHORIZED")) return "Сессия недействительна — войдите заново";
   if (m.includes("CONNECT_TIMEOUT")) return "Не удалось соединиться с Telegram за 20 секунд — проверьте интернет";
@@ -51,8 +60,11 @@ const msgText = (m: Api.Message) => m.message || (m.media ? "[вложение]"
 
 // ---------- вход ----------
 export async function tguStartLogin(apiIdRaw: string, apiHash: string, phone: string): Promise<void> {
-  const apiId = Number(apiIdRaw.trim());
-  if (!apiId || !apiHash.trim() || !phone.trim()) return;
+  const effId = apiIdRaw.trim() || TG_APP.apiId;
+  const effHash = apiHash.trim() || TG_APP.apiHash;
+  const apiId = Number(effId);
+  if (!apiId || !effHash || !phone.trim()) return;
+  apiIdRaw = effId; apiHash = effHash;
   await destroyClient();
   patch(t => { t.apiId = apiIdRaw.trim(); t.apiHash = apiHash.trim(); t.phone = phone.trim(); t.status = "connecting"; t.stage = undefined; t.error = undefined; });
   const c = makeClient("", apiId, apiHash.trim());

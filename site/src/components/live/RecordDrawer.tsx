@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
-import { A, entityCfg, recById, recTitle, userName, getState } from "@/lib/store";
+import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, entityCfg as entCfg } from "@/lib/store";
 import { FieldInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
@@ -139,6 +139,8 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
             </div>
           </section>
 
+          <RelatedBlock recId={r.id} />
+
           <section className="border-t px-4 py-3.5">
             <div className="eyebrow mb-2">Хронология</div>
             <div className="mb-2.5 flex gap-1.5">
@@ -164,5 +166,42 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
         </div>
       </aside>
     </>
+  );
+}
+
+// Связанное: вся история клиента в одном месте — записи, ссылающиеся сюда, и его диалоги
+function RelatedBlock({ recId }: { recId: string }) {
+  const { records, chats } = relatedOf(recId);
+  if (!records.length && !chats.length) return null;
+  return (
+    <section className="border-t px-4 py-3.5">
+      <div className="eyebrow mb-2">Связанное</div>
+      <div className="flex flex-col gap-1.5">
+        {records.map(rr => {
+          const e = entCfg(rr.entityId);
+          const stg = e.stages?.find(x => x.id === rr.stageId);
+          return (
+            <button key={rr.id} onClick={() => A.openRecord(rr.id)}
+              className="press flex items-center gap-2.5 rounded-md border bg-background px-2.5 py-2 text-left transition-colors hover:border-foreground/25">
+              <span className="text-[11px] text-muted-foreground">{e.name}</span>
+              <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{recTitle(rr.id)}</span>
+              {stg && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[10px]" style={{ background: stg.color + "18", borderColor: stg.color + "50" }}>
+                  <span className="size-1 rounded-full" style={{ background: stg.color }} />{stg.label}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        {chats.map(c => (
+          <button key={c.id} onClick={() => { A.openChat(c.id); A.goto("inbox"); }}
+            className="press flex items-center gap-2.5 rounded-md border border-dashed bg-background px-2.5 py-2 text-left transition-colors hover:border-foreground/25">
+            <span className="text-[11px] text-muted-foreground">диалог</span>
+            <span className="min-w-0 flex-1 truncate text-[12.5px]">{c.name}</span>
+            <span className="font-mono2 shrink-0 text-[10px] text-muted-foreground">{c.msgs.length} сообщ.</span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }

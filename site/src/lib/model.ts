@@ -68,6 +68,32 @@ export const FIELD_TYPES: { type: FieldType; label: string; group: string }[] = 
   { type: "relation", label: "Связь с разделом", group: "Связи" },
 ];
 export const PALETTE = ["#8A8578", "#BC9F5C", "#7D8A5C", "#B0725A", "#6E8B8A", "#6E8B4F", "#A8543F", "#5C7A9E", "#8B6E86", "#A8547C"];
+// ---------- автоматизации: универсальные правила «когда → тогда» ----------
+export type RuleTrigger =
+  | { type: "record_created"; entityId: string }
+  | { type: "stage_enter"; entityId: string; stageId: string }   // stageId либо "kind:won"/"kind:lost" — любая финальная
+  | { type: "stage_stuck"; entityId: string; days: number }
+  | { type: "quiet"; entityId: string; days: number };           // тишина: нет активности N дней
+export interface Rule {
+  id: string; name: string; enabled: boolean; fired: number;
+  trigger: RuleTrigger;
+  action: { type: "task"; title: string; kind: TaskKind; afterHours: number };
+}
+export const defaultRules = (): Rule[] => [
+  { id: uid("rule"), name: "Новая запись → связаться за час", enabled: true, fired: 0,
+    trigger: { type: "record_created", entityId: "deals" },
+    action: { type: "task", title: "Связаться с клиентом", kind: "call", afterHours: 1 } },
+  { id: uid("rule"), name: "Застряла на стадии 3 дня", enabled: true, fired: 0,
+    trigger: { type: "stage_stuck", entityId: "deals", days: 3 },
+    action: { type: "task", title: "Подтолкнуть: клиент завис на стадии", kind: "call", afterHours: 2 } },
+  { id: uid("rule"), name: "Успех → взять отзыв и продать ещё", enabled: true, fired: 0,
+    trigger: { type: "stage_enter", entityId: "deals", stageId: "kind:won" },
+    action: { type: "task", title: "Взять отзыв и предложить следующий заказ", kind: "msg", afterHours: 24 } },
+  { id: uid("rule"), name: "Спящий клиент: тишина 60 дней", enabled: true, fired: 0,
+    trigger: { type: "quiet", entityId: "deals", days: 60 },
+    action: { type: "task", title: "Напомнить о себе: давно не общались", kind: "msg", afterHours: 1 } },
+];
+
 export const defaultStages = (): Stage[] => [
   { id: uid("s"), label: "Новая", color: "#8A8578", kind: "open" },
   { id: uid("s"), label: "В работе", color: "#BC9F5C", kind: "open" },

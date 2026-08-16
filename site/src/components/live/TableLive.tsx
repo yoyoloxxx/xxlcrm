@@ -9,13 +9,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ArrowDown, ArrowUp, Maximize2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function TableLive({ entity: e }: { entity: EntityCfg }) {
+export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (r: import("@/lib/model").Rec) => boolean }) {
   const [editing, setEditing] = useState<{ rec: string; field: string } | null>(null);
   const [quick, setQuick] = useState("");
   const [sort, setSort] = useState<{ fieldId: string; dir: 1 | -1 } | null>(null);
 
   const cols = e.fields.filter(f => f.id !== e.titleFieldId && f.inTable !== false);
-  const sorted = [...recordsOf(e.id)];
+  const sorted = filter ? recordsOf(e.id).filter(filter) : [...recordsOf(e.id)];
   if (sort) {
     const f = e.fields.find(x => x.id === sort.fieldId);
     sorted.sort((a, b) => {
