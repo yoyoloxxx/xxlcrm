@@ -14,10 +14,13 @@ import { cloudBoot } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
 import { EntIcon } from "@/components/live/icons";
+import { TasksLive } from "@/components/live/TasksLive";
+import { MyDayLive } from "@/components/live/MyDayLive";
+import { ensureBirthdayTasks } from "@/lib/bday";
 import {
-  Bell, Briefcase, Cake, Calendar, CalendarClock, Copy, LogIn,
+  Bell, Calendar, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
-  MessageSquare, Moon, Package, PanelLeft, Phone, Plus,
+  Moon, Package, PanelLeft, Plus,
   Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -55,18 +58,6 @@ function Idle({ children, className, primary, title }: { children: React.ReactNo
   );
 }
 
-function StagePill({ label, tone = 0, small }: { label: string; tone?: number; small?: boolean }) {
-  const colors = ["#8A8578", "#BC9F5C", "#7D8A5C", "#B0725A", "#6E8B8A", "#6E8B4F", "#A8543F"];
-  const c = colors[tone % colors.length];
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full border font-medium", small ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-[11.5px]")}
-      style={{ background: c + "18", borderColor: c + "50" }}>
-      <span className="size-1.5 rounded-full" style={{ background: c }} />
-      {label}
-    </span>
-  );
-}
-
 function Avatar({ n, hue, size = 22 }: { n: string; hue: number; size?: number }) {
   return (
     <span className="grid shrink-0 place-items-center rounded-full text-[10px] font-semibold"
@@ -88,7 +79,12 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
-  useEffect(() => { initIntegrations(); void cloudBoot(); }, []); // каналы + вход в облако, если сессия сохранена
+  useEffect(() => {
+    initIntegrations(); void cloudBoot(); // каналы + вход в облако, если сессия сохранена
+    const t = window.setTimeout(ensureBirthdayTasks, 1500); // напоминания «поздравить» — после загрузки данных
+    const iv = window.setInterval(ensureBirthdayTasks, 3600000);
+    return () => { clearTimeout(t); clearInterval(iv); };
+  }, []);
   const entId = page.startsWith("ent:") ? page.slice(4) : null;
   useEffect(() => {
     if (entId && !s.entities.some(e => e.id === entId)) setPage(s.entities.length ? "ent:" + s.entities[0].id : "myday");
@@ -115,7 +111,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.7</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.8</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -216,8 +212,8 @@ export default function App() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto">
-          {page === "myday" && <MyDay />}
-          {page === "tasks" && <TasksScreen />}
+          {page === "myday" && <MyDayLive goTasks={() => setPage("tasks")} goInbox={() => setPage("inbox")} />}
+          {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
           {page === "dashboard" && <Dashboard />}
@@ -226,7 +222,7 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.7 · живое: конструктор разделов, аккаунты и команда, все разделы, Входящие + каналы · остальное — заглушки</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.8 · живое: всё основное — разделы и конструктор, Входящие, Задачи, Мой день, команда · заглушки: Дашборд, Автоматизации</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -252,66 +248,6 @@ function ScreenHead({ title, sub, children }: { title: string; sub?: string; chi
         {sub && <p className="mt-0.5 text-[12.5px] text-muted-foreground">{sub}</p>}
       </div>
       {children && <div className="flex items-center gap-1.5">{children}</div>}
-    </div>
-  );
-}
-
-function MyDay() {
-  const tasks = [
-    { icon: Phone, t: "Дожать: КП без ответа 3 дня", rec: "Портал для «СтройТех»", due: "просрочено · вчера", danger: true, u: ["М", 152] as const },
-    { icon: Phone, t: "Позвонить: обсудить смету этапа 2", rec: "Ремонт офиса «Лаборатория 42»", due: "11:30", u: ["Г", 42] as const },
-    { icon: CalendarClock, t: "Встреча по договору в Zoom", rec: "Интернет-магазин «Фабрика Уюта»", due: "15:00", u: ["Г", 42] as const },
-    { icon: MessageSquare, t: "Отправить трек-номер клиенту", rec: "Заказ #1047", due: "17:00", u: ["А", 210] as const },
-  ];
-  const noNext = [
-    { t: "Брендинг «Клиника Мед+»", stage: "Квалификация", tone: 1 },
-    { t: "SEO-продвижение «ТК Восток»", stage: "Переговоры", tone: 3 },
-  ];
-  return (
-    <div className="cascade mx-auto max-w-3xl px-5 py-6">
-      <ScreenHead title="Добрый день, Глеб" sub="суббота, 16 августа — 4 задачи, 2 записи без следующего шага" />
-      <div className="mt-4 flex flex-wrap gap-2">
-        {[["Открытых задач", "4"], ["Выполнено сегодня", "3"], ["Без следующего шага", "2"], ["Новых заявок", "6"]].map(([l, v]) => (
-          <span key={l} className="flex items-baseline gap-2 rounded-full border bg-card px-3 py-1 text-[12px] text-muted-foreground">
-            {l} <b className="font-mono2 tnum text-[12.5px] text-foreground">{v}</b>
-          </span>
-        ))}
-      </div>
-
-      <div className="mt-6">
-        <div className="eyebrow">Сегодня</div>
-        <div className="mt-2 divide-y rounded-lg border bg-card">
-          {tasks.map((t, i) => (
-            <div key={i} className="group flex items-center gap-3 px-3.5 py-2.5">
-              <Idle className="h-[18px] w-[18px] justify-center rounded-[5px] border p-0" title="В обёртке чекбоксы неактивны"><span /></Idle>
-              <t.icon className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13.5px] leading-snug">{t.t}</div>
-                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{t.rec}</div>
-              </div>
-              <span className={cn("font-mono2 tnum text-[11.5px]", t.danger ? "font-medium text-destructive" : "text-muted-foreground")}>{t.due}</span>
-              <Avatar n={t.u[0]} hue={t.u[1]} size={20} />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <div className="flex items-baseline gap-2">
-          <div className="eyebrow">Без следующего шага</div>
-          <span className="text-[11px] text-muted-foreground">— принцип: у каждой активной записи должна быть задача</span>
-        </div>
-        <div className="mt-2 divide-y rounded-lg border border-dashed bg-card/60">
-          {noNext.map((r, i) => (
-            <div key={i} className="flex items-center gap-3 px-3.5 py-2.5">
-              <Briefcase className="size-4 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[13.5px]">{r.t}</span>
-              <StagePill label={r.stage} tone={r.tone} small />
-              <Idle><Plus className="size-3" /> задача</Idle>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -523,70 +459,6 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
         </div>
         <TeamLive />
       </div>
-    </div>
-  );
-}
-
-function TasksScreen() {
-  const rows = [
-    { icon: Phone, t: "Дожать: КП без ответа 3 дня", rec: "Портал для «СтройТех»", due: "просрочено · вчера", danger: true, u: ["М", 152] as const },
-    { icon: Phone, t: "Позвонить: обсудить смету этапа 2", rec: "Ремонт офиса «Лаборатория 42»", due: "11:30", u: ["Г", 42] as const },
-    { icon: MessageSquare, t: "Отправить трек-номер клиенту", rec: "Заказ #1047 · СДЭК 10083456789", due: "17:00", u: ["А", 210] as const },
-    { icon: CalendarClock, t: "Встреча по договору в Zoom", rec: "Интернет-магазин «Фабрика Уюта»", due: "завтра, 15:00", u: ["Г", 42] as const },
-  ];
-  const bdays = [
-    { n: "Ксения Макарова", d: "19 августа", left: "через 3 дня", src: "из Tilda" },
-    { n: "Виктор Гусев", d: "24 августа", left: "через 8 дней", src: "карточка клиента" },
-  ];
-  return (
-    <div className="cascade mx-auto max-w-3xl px-5 py-6">
-      <ScreenHead title="Задачи" sub="все задачи команды + автоматические напоминания">
-        <Idle><ListFilter className="size-3" /> Фильтры</Idle>
-        <Idle primary><Plus className="size-3.5" /> Задача</Idle>
-      </ScreenHead>
-
-      <div className="mt-5">
-        <div className="eyebrow">Сегодня и просроченные</div>
-        <div className="mt-2 divide-y rounded-lg border bg-card">
-          {rows.map((t, i) => (
-            <div key={i} className="flex items-center gap-3 px-3.5 py-2.5">
-              <Idle className="h-[18px] w-[18px] justify-center rounded-[5px] border p-0" title="В обёртке чекбоксы неактивны"><span /></Idle>
-              <t.icon className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13.5px] leading-snug">{t.t}</div>
-                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{t.rec}</div>
-              </div>
-              <span className={cn("font-mono2 tnum text-[11.5px]", t.danger ? "font-medium text-destructive" : "text-muted-foreground")}>{t.due}</span>
-              <Avatar n={t.u[0]} hue={t.u[1]} size={20} />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <div className="flex items-baseline gap-2">
-          <div className="eyebrow">Дни рождения</div>
-          <span className="text-[11px] text-muted-foreground">— даты сохраняются из заявок Tilda и карточек, напоминание приходит сюда в 10:00</span>
-        </div>
-        <div className="mt-2 divide-y rounded-lg border bg-card">
-          {bdays.map((b, i) => (
-            <div key={i} className="flex items-center gap-3 px-3.5 py-2.5">
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full" style={{ background: "hsl(var(--brass) / 0.16)" }}>
-                <Cake className="size-3.5" style={{ color: "var(--brass-ink)" }} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] leading-snug">{b.n}</div>
-                <div className="font-mono2 mt-0.5 text-[10.5px] text-muted-foreground">{b.d} · {b.left} · {b.src}</div>
-              </div>
-              <Idle><MessageSquare className="size-3" /> Поздравить по шаблону</Idle>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <p className="mt-4 text-[11.5px] leading-snug text-muted-foreground">
-        Правило раздела: у каждой активной записи есть следующая задача. Автоматизации, СДЭК-статусы и дни рождения создают задачи сами.
-      </p>
     </div>
   );
 }

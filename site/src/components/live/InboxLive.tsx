@@ -24,6 +24,11 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (chat && s.activeChatId !== chat.id) A.openChat(chat.id); }, [chat?.id]);
+  // заготовка из «Поздравить по шаблону» (Задачи / Мой день)
+  useEffect(() => {
+    const pd = s.pendingDraft;
+    if (pd && chat?.id === pd.chatId) { setDraft(pd.text); A.consumeDraft(); }
+  }, [s.pendingDraft, chat?.id]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: 1e9 }); }, [chat?.id, chat?.msgs.length]);
 
   const ints = s.integrations;

@@ -55,6 +55,7 @@ export const ENTITIES: EntityCfg[] = [
       f("role", "Должность", "text"),
       f("phone", "Телефон", "phone"),
       f("email", "Email", "email"),
+      f("bday", "День рождения", "date", { inTable: false }),
       f("company", "Компания", "relation", { relationTo: "companies" }),
     ],
   },
@@ -89,13 +90,15 @@ export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[];
   const c5 = co("ТК Восток", "логистика", "Москва", "+7 984 359-29-50");
   const c6 = co("Азбука Вкуса", "ритейл", "СПб", "+7 961 473-36-85");
 
-  const p = (t: string, role: string, phone: string, email: string, companyId: string) =>
-    rec("contacts", { title: t, role, phone, email, company: companyId }, { ago: 15, owner: "u2" });
-  const p1 = p("Виктор Гусев", "Владелец", "+7 931 502-18-46", "v.gusev@stroyteh.ru", c1.id);
+  const y = new Date().getFullYear();
+  const bd = (mon: number, day: number, yearBack: number) => new Date(y - yearBack, mon - 1, day, 12).getTime();
+  const p = (t: string, role: string, phone: string, email: string, companyId: string, bday?: number) =>
+    rec("contacts", { title: t, role, phone, email, company: companyId, ...(bday ? { bday } : {}) }, { ago: 15, owner: "u2" });
+  const p1 = p("Виктор Гусев", "Владелец", "+7 931 502-18-46", "v.gusev@stroyteh.ru", c1.id, bd(8, 24, 41));
   const p2 = p("Анна Волкова", "Директор по маркетингу", "+7 934 771-20-84", "a.volkova@uyut.ru", c2.id);
   const p3 = p("Дарья Киселёва", "Главврач", "+7 920 337-60-12", "kiseleva@medplus.ru", c3.id);
   const p4 = p("Сергей Соколов", "ИТ-директор", "+7 932 415-77-03", "s.sokolov@lab42.ru", c4.id);
-  const p5 = p("Ксения Макарова", "Закупки", "+7 961 208-44-91", "makarova@av.ru", c6.id);
+  const p5 = p("Ксения Макарова", "Закупки", "+7 961 208-44-91", "makarova@av.ru", c6.id, bd(8, 19, 34));
 
   const d = (t: string, amount: number, companyId: string | undefined, contactId: string | undefined, source: string, stage: string, ago: number, owner = "u1") =>
     rec("deals", { title: t, amount, company: companyId, contact: contactId, source: "o_" + source }, { stage, ago, owner });

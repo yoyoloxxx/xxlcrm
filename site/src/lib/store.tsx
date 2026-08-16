@@ -19,6 +19,7 @@ interface State extends DataState {
   wsName: string;
   inviteCode: string;
   authStage: "auth" | "ws" | null; // оверлей входа/регистрации и создания/вступления в пространство
+  pendingDraft: { chatId: string; text: string } | null; // заготовка ответа, ждущая открытия Входящих
 }
 
 // ---------- адаптер персистентности (при Supabase заменяется целиком этот объект) ----------
@@ -86,12 +87,20 @@ function normalizeInts(raw: unknown): Integrations {
   ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
   return ints;
 }
+// «День рождения» у Контактов появился в v0.8 — дораздаём конфигам, где его ещё нет
+export function ensureBdayField(entities: EntityCfg[]) {
+  const c = entities.find(e => e.id === "contacts");
+  if (c && !c.fields.some(f => f.type === "date" && /рожде|birth/i.test(f.label))) {
+    c.fields.push({ id: "bday", label: "День рождения", type: "date", inTable: false });
+  }
+}
 const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 ensurePos(initial.records);
 const st: State = {
   ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null,
-  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null,
+  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null, pendingDraft: null,
 };
 
 let version = 0;
@@ -249,6 +258,25 @@ export const A = {
       if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId);
     });
   },
+  taskAddAt(id: string | null, title: string, kind: Task["kind"], dueTs: number, recId?: string) {
+    if (id && st.tasks.some(t => t.id === id)) return; // напоминание уже есть (в т.ч. выполненное)
+    mut(s => {
+      const r = recId ? s.records.find(x => x.id === recId) : undefined;
+      s.tasks.push({ id: id ?? uid("t"), title, kind, recordId: recId, ownerId: r?.ownerId ?? s.currentUserId, due: dueTs, done: false });
+      if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId);
+    });
+  },
+  taskDelete(taskId: string) {
+    mut(s => { s.tasks = s.tasks.filter(t => t.id !== taskId); });
+  },
+  openChatWithDraft(chatId: string, text: string) {
+    mut(s => {
+      s.activeChatId = chatId;
+      s.pendingDraft = { chatId, text };
+      const c = s.chats.find(x => x.id === chatId); if (c) c.unread = 0;
+    });
+  },
+  consumeDraft() { mut(s => { s.pendingDraft = null; }); },
   toggleTask(taskId: string) {
     mut(s => {
       const t = s.tasks.find(x => x.id === taskId)!;
@@ -449,11 +477,55 @@ export const A = {
     const findVal = (keys: string[]) => Object.entries(fields).find(([k]) => keys.some(kk => low(k).includes(kk)))?.[1];
     const name = findVal(["name", "имя", "фио"]);
     const phone = findVal(["phone", "тел"]);
-    const id = A.createRecord("deals", { title: name || "Заявка с Tilda", source: entityCfg("deals").fields.find(f => f.id === "source")?.options?.find(o => /сайт/i.test(o.label))?.id });
+    const email = findVal(["mail", "почта"]);
+    const bdayRaw = findVal(["birth", "bday", "рожден", "др "]);
+    const bdayTs = parseRuDate(bdayRaw);
+    // клиент: ищем контакт по телефону, иначе создаём — сюда ляжет и дата рождения (для поздравлений)
+    let contactId: string | undefined;
+    const contactsCfg = st.entities.find(e => e.id === "contacts");
+    if (contactsCfg && (name || phone)) {
+      const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+      const phoneF = contactsCfg.fields.find(f => f.type === "phone");
+      const existing = phone && phoneF ? st.records.find(r => r.entityId === "contacts" && digits(r.values[phoneF.id]) === digits(phone)) : undefined;
+      if (existing) {
+        contactId = existing.id;
+        if (bdayTs) mut(s => { const r = s.records.find(x => x.id === contactId)!; r.values["bday"] = bdayTs; r.updatedAt = now(); });
+      } else {
+        const values: Record<string, unknown> = { [contactsCfg.titleFieldId]: name || phone || "Клиент с Tilda" };
+        if (phoneF && phone) values[phoneF.id] = phone;
+        const emailF = contactsCfg.fields.find(f => f.type === "email");
+        if (emailF && email) values[emailF.id] = email;
+        if (bdayTs) values["bday"] = bdayTs;
+        contactId = A.createRecord("contacts", values);
+      }
+    }
+    const dealsCfg = entityCfg("deals");
+    const dealValues: Record<string, unknown> = { title: name || "Заявка с Tilda", source: dealsCfg.fields.find(f => f.id === "source")?.options?.find(o => /сайт/i.test(o.label))?.id };
+    const contactF = dealsCfg.fields.find(f => f.type === "relation" && f.relationTo === "contacts");
+    if (contactF && contactId) dealValues[contactF.id] = contactId;
+    const id = A.createRecord("deals", dealValues);
     mut(() => pushAct(id, "comment", `Заявка с Tilda: ${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ")}`));
-    toast.success("Заявка с Tilda упала в воронку", { description: name || phone || "" });
+    toast.success("Заявка с Tilda упала в воронку", { description: [name || phone, bdayTs ? "ДР сохранён" : ""].filter(Boolean).join(" · ") });
   },
 };
+
+// «19.08.1992», «1992-08-19», «19/08/92» → таймстамп (для дат рождения из форм)
+export function parseRuDate(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const t = raw.trim();
+  let m = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (m) {
+    let y = Number(m[3]); if (y < 100) y += y > 30 ? 1900 : 2000;
+    const d = new Date(y, Number(m[2]) - 1, Number(m[1]), 12);
+    return isNaN(d.getTime()) ? undefined : d.getTime();
+  }
+  m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
+    return isNaN(d.getTime()) ? undefined : d.getTime();
+  }
+  return undefined;
+}
 
 // совпадение внешних id двух диалогов (каналы не смешиваются)
 function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
@@ -478,6 +550,7 @@ export function enterCloud(
   ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
 ) {
   Object.assign(st, data);
+  ensureBdayField(st.entities);
   ensurePos(st.records);
   st.users = ctx.users; st.currentUserId = ctx.meId;
   st.mode = "cloud"; st.wsId = ctx.wsId; st.wsName = ctx.wsName; st.inviteCode = ctx.inviteCode;
