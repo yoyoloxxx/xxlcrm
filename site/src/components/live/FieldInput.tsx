@@ -1,6 +1,6 @@
 // Редактор значения поля — карточка, inline-таблица, быстрые формы
 import type { Field } from "@/lib/model";
-import { recordsOf, recTitle, allUsers } from "@/lib/store";
+import { recordsOf, recTitle, allUsers, A, entityCfg } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -48,12 +48,17 @@ export function FieldInput({ field: f, value, onChange, autoFocus, onDone }: {
       );
     case "relation": {
       const targets = recordsOf(f.relationTo ?? "");
+      const relEnt = f.relationTo ? entityCfg(f.relationTo) : undefined;
       return (
-        <Select value={(value as string) ?? "__none"} onValueChange={v => { onChange(v === "__none" ? undefined : v); onDone?.(); }}>
+        <Select value={(value as string) ?? "__none"} onValueChange={v => {
+          if (v === "__new" && f.relationTo) { const id = A.createRecord(f.relationTo, {}); onChange(id); onDone?.(); A.openRecord(id); return; }
+          onChange(v === "__none" ? undefined : v); onDone?.();
+        }}>
           <SelectTrigger autoFocus={autoFocus} className="h-9 text-[13px]"><SelectValue placeholder="—" /></SelectTrigger>
           <SelectContent className="max-h-64">
             <SelectItem value="__none"><span className="text-muted-foreground">Не выбрано</span></SelectItem>
             {targets.map(r => <SelectItem key={r.id} value={r.id}>{recTitle(r.id)}</SelectItem>)}
+            {f.relationTo && <SelectItem value="__new"><span className="font-medium" style={{ color: "var(--brass-ink)" }}>＋ Создать {relEnt?.name ?? "запись"}</span></SelectItem>}
           </SelectContent>
         </Select>
       );

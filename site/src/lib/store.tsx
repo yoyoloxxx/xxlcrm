@@ -378,14 +378,18 @@ export const A = {
   tguSyncDialog(tguId: string, name: string, phone: string | undefined, msgs: { ts: number; out: boolean; text: string }[], unread: number) {
     mut(s => {
       let c = s.chats.find(x => x.ext?.tgu === tguId);
+      const isNew = !c;
       if (!c) {
-        c = { id: uid("c"), name, phone, channel: "tg", unread: 0, msgs: [], ext: { tgu: tguId } };
+        c = { id: uid("c"), name: niceContactName(name, "tg", phone), phone, channel: "tg", unread: 0, msgs: [], ext: { tgu: tguId } };
         s.chats.unshift(c);
       }
-      c.name = name; if (phone) c.phone = phone;
+      c.name = niceContactName(name, "tg", phone); if (phone) c.phone = phone;
       const lastTs = c.msgs.length ? c.msgs[c.msgs.length - 1].ts : 0;
-      for (const m of msgs) if (m.ts > lastTs) c.msgs.push({ id: uid("m"), ts: m.ts, out: m.out, text: m.text });
-      if (s.activeChatId !== c.id) c.unread = Math.max(c.unread, unread);
+      let added = 0;
+      for (const m of msgs) if (m.ts > lastTs) { c.msgs.push({ id: uid("m"), ts: m.ts, out: m.out, text: m.text }); if (!m.out) added++; }
+      // непрочитанные не раздуваем при периодической ресинхронизации: при создании берём счётчик Telegram, дальше растим только на реально добавленные входящие
+      if (isNew) c.unread = s.activeChatId === c.id ? 0 : unread;
+      else if (added && s.activeChatId !== c.id) c.unread += added;
     });
   },
   chatCreateLead(chatId: string): string | null {

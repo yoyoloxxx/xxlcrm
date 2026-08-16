@@ -1,4 +1,4 @@
-// Конфигурация разделов (пока статическая — конструктор оживёт на шаге 3) + демо-сиды
+// Конфигурация дефолтных разделов (Сделки + Клиенты) + демо-сиды. Остальные разделы пользователь добавляет сам.
 import type { EntityCfg, Field, Option, Rec, Stage, Task, Activity, User, Chat, ReplyTemplate } from "./model";
 import { uid, days, now } from "./model";
 
@@ -25,8 +25,7 @@ export const ENTITIES: EntityCfg[] = [
     fields: [
       f("title", "Название", "text", { required: true }),
       f("amount", "Сумма", "money", { required: true }),
-      f("company", "Компания", "relation", { relationTo: "companies" }),
-      f("contact", "Контакт", "relation", { relationTo: "contacts" }),
+      f("contact", "Клиент", "relation", { relationTo: "contacts" }),
       f("source", "Источник", "select", { options: [opt("Рекомендация", "#7D8A5C"), opt("Сайт", "#6E8B8A"), opt("Telegram", "#5C7A9E"), opt("Конференция", "#B0725A"), opt("Холодный звонок", "#8A8578")] }),
       f("track", "Трек-номер СДЭК", "text", { inTable: false }),
       f("deadline", "Дедлайн", "date", { inTable: false }),
@@ -39,24 +38,13 @@ export const ENTITIES: EntityCfg[] = [
     ],
   },
   {
-    id: "companies", name: "Компания", namePlural: "Компании", icon: "building", titleFieldId: "title",
-    fields: [
-      f("title", "Название", "text", { required: true }),
-      f("sphere", "Сфера", "select", { options: [opt("IT", "#6E8B8A"), opt("Медицина", "#8B6E86"), opt("Ритейл", "#BC9F5C"), opt("Производство", "#8A8578"), opt("Стройка", "#B0725A"), opt("Логистика", "#5C7A9E")] }),
-      f("city", "Город", "text"),
-      f("phone", "Телефон", "phone"),
-      f("site", "Сайт", "url"),
-    ],
-  },
-  {
-    id: "contacts", name: "Контакт", namePlural: "Контакты", icon: "users", titleFieldId: "title",
+    id: "contacts", name: "Клиент", namePlural: "Клиенты", icon: "contact", titleFieldId: "title",
     fields: [
       f("title", "Имя", "text", { required: true }),
-      f("role", "Должность", "text"),
       f("phone", "Телефон", "phone"),
       f("email", "Email", "email"),
       f("bday", "День рождения", "date", { inTable: false }),
-      f("company", "Компания", "relation", { relationTo: "companies" }),
+      f("notes", "Комментарий", "textarea", { inTable: false }),
     ],
   },
 ];
@@ -81,35 +69,26 @@ export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[];
     return r;
   };
 
-  const co = (t: string, sphere: string, city: string, phone: string) =>
-    rec("companies", { title: t, sphere: "o_" + sphere, city, phone }, { ago: 20 });
-  const c1 = co("СтройТех", "стройка", "Казань", "+7 931 177-63-57");
-  const c2 = co("Фабрика Уюта", "производство", "Екатеринбург", "+7 934 618-63-90");
-  const c3 = co("Клиника «Мед+»", "медицина", "Москва", "+7 920 865-64-65");
-  const c4 = co("Лаборатория 42", "it", "Казань", "+7 932 363-85-35");
-  const c5 = co("ТК Восток", "логистика", "Москва", "+7 984 359-29-50");
-  const c6 = co("Азбука Вкуса", "ритейл", "СПб", "+7 961 473-36-85");
-
   const y = new Date().getFullYear();
   const bd = (mon: number, day: number, yearBack: number) => new Date(y - yearBack, mon - 1, day, 12).getTime();
-  const p = (t: string, role: string, phone: string, email: string, companyId: string, bday?: number) =>
-    rec("contacts", { title: t, role, phone, email, company: companyId, ...(bday ? { bday } : {}) }, { ago: 15, owner: "u2" });
-  const p1 = p("Виктор Гусев", "Владелец", "+7 931 502-18-46", "v.gusev@stroyteh.ru", c1.id, bd(8, 24, 41));
-  const p2 = p("Анна Волкова", "Директор по маркетингу", "+7 934 771-20-84", "a.volkova@uyut.ru", c2.id);
-  const p3 = p("Дарья Киселёва", "Главврач", "+7 920 337-60-12", "kiseleva@medplus.ru", c3.id);
-  const p4 = p("Сергей Соколов", "ИТ-директор", "+7 932 415-77-03", "s.sokolov@lab42.ru", c4.id);
-  const p5 = p("Ксения Макарова", "Закупки", "+7 961 208-44-91", "makarova@av.ru", c6.id, bd(8, 19, 34));
+  const p = (t: string, phone: string, email: string, bday?: number) =>
+    rec("contacts", { title: t, phone, email, ...(bday ? { bday } : {}) }, { ago: 15, owner: "u2" });
+  const p1 = p("Виктор Гусев", "+7 931 502-18-46", "v.gusev@stroyteh.ru", bd(8, 24, 41));
+  const p2 = p("Анна Волкова", "+7 934 771-20-84", "a.volkova@uyut.ru");
+  const p3 = p("Дарья Киселёва", "+7 920 337-60-12", "kiseleva@medplus.ru");
+  const p4 = p("Сергей Соколов", "+7 932 415-77-03", "s.sokolov@lab42.ru");
+  const p5 = p("Ксения Макарова", "+7 961 208-44-91", "makarova@av.ru", bd(8, 19, 34));
 
-  const d = (t: string, amount: number, companyId: string | undefined, contactId: string | undefined, source: string, stage: string, ago: number, owner = "u1") =>
-    rec("deals", { title: t, amount, company: companyId, contact: contactId, source: "o_" + source }, { stage, ago, owner });
-  d("Лендинг курса аналитики", 87000, undefined, undefined, "рекомендация", "s_new", 1, "u1");
-  d("Сайт-каталог мебели", 412000, c2.id, p2.id, "сайт", "s_new", 2, "u2");
-  d("Брендинг клиники", 180000, c3.id, p3.id, "telegram", "s_qual", 4, "u3");
-  d("Поддержка на год", 540000, c4.id, p4.id, "сайт", "s_qual", 6, "u2");
-  const big = d("Портал для «СтройТех»", 1240000, c1.id, p1.id, "рекомендация", "s_neg", 9, "u1");
-  d("Мобильное приложение", 890000, c5.id, undefined, "холодныйзвонок", "s_neg", 7, "u3");
-  d("Интеграция с 1С", 310000, c6.id, p5.id, "конференция", "s_contract", 12, "u1");
-  d("Аудит маркетинга", 96000, c5.id, undefined, "конференция", "s_won", 16, "u2");
+  const d = (t: string, amount: number, contactId: string | undefined, source: string, stage: string, ago: number, owner = "u1") =>
+    rec("deals", { title: t, amount, contact: contactId, source: "o_" + source }, { stage, ago, owner });
+  d("Лендинг курса аналитики", 87000, undefined, "рекомендация", "s_new", 1, "u1");
+  d("Сайт-каталог мебели", 412000, p2.id, "сайт", "s_new", 2, "u2");
+  d("Брендинг клиники", 180000, p3.id, "telegram", "s_qual", 4, "u3");
+  d("Поддержка на год", 540000, p4.id, "сайт", "s_qual", 6, "u2");
+  const big = d("Портал для «СтройТех»", 1240000, p1.id, "рекомендация", "s_neg", 9, "u1");
+  d("Мобильное приложение", 890000, undefined, "холодныйзвонок", "s_neg", 7, "u3");
+  d("Интеграция с 1С", 310000, p5.id, "конференция", "s_contract", 12, "u1");
+  d("Аудит маркетинга", 96000, undefined, "конференция", "s_won", 16, "u2");
 
   activities.push(
     { id: uid("a"), recordId: big.id, ts: days(-2), kind: "comment", text: "Клиент просит скидку 10%, обсуждаем этапность оплаты", userId: "u2" },

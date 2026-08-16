@@ -236,7 +236,7 @@ export function TemplatesLive() {
         <MessageSquare className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Шаблоны ответов
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-        Переменные подставляются из связанной сделки: <code className="font-mono2 text-[11px]">{"{имя} {клиент} {сумма} {стадия} {трек} {менеджер} {компания}"}</code>
+        Переменные подставляются из связанной сделки: <code className="font-mono2 text-[11px]">{"{имя} {клиент} {сумма} {стадия} {трек} {менеджер}"}</code>
       </p>
       <div className="mt-2.5 flex flex-col gap-2">
         {s.replyTemplates.map(t => (

@@ -1,4 +1,4 @@
-// Подстановка переменных шаблона из связанной записи: {имя} {клиент} {сумма} {стадия} {трек} {менеджер} {компания}
+// Подстановка переменных шаблона из связанной записи: {имя} {клиент} {сумма} {стадия} {трек} {менеджер}
 import type { Chat } from "./model";
 import { fmtMoney } from "./model";
 import { getState, recById, recTitle, userName, entityCfg } from "./store";
@@ -21,8 +21,6 @@ export function fillTemplate(text: string, chat: Chat): string {
     if (track && rec.values[track.id]) vars["трек"] = String(rec.values[track.id]);
     const stage = e.stages?.find(s => s.id === rec.stageId);
     if (stage) vars["стадия"] = stage.label;
-    const compF = e.fields.find(f => f.type === "relation" && f.relationTo === "companies");
-    if (compF && rec.values[compF.id]) vars["компания"] = recTitle(rec.values[compF.id] as string);
   }
   return text.replace(/\{([^}]+)\}/g, (m, key: string) => {
     const v = vars[key.trim().toLowerCase()];

@@ -18,6 +18,8 @@ const tgu = () => getState().integrations.tgUser;
 const patch = (fn: (t: ReturnType<typeof tgu>) => void) => A.intPatch(i => fn(i.tgUser));
 
 let client: TelegramClient | null = null;
+let resyncTimer: number | undefined;
+let resyncBusy = false;
 let codeResolve: ((v: string) => void) | null = null;
 let passResolve: ((v: string) => void) | null = null;
 let cancelRejects: ((e: Error) => void)[] = [];
@@ -130,6 +132,7 @@ export async function tguDisconnect() {
 }
 
 async function destroyClient() {
+  if (resyncTimer) { window.clearInterval(resyncTimer); resyncTimer = undefined; }
   const c = client; client = null;
   if (c) { try { await c.destroy(); } catch { /* уже мёртв */ } }
   peers.clear();
@@ -138,12 +141,18 @@ async function destroyClient() {
 // ---------- живые события ----------
 function subscribe(c: TelegramClient) {
   c.addEventHandler(onNewMessage, new NewMessage({}));
+  if (resyncTimer) window.clearInterval(resyncTimer);
+  resyncTimer = window.setInterval(async () => {
+    if (resyncBusy || !client || tgu().status !== "ok") return;
+    resyncBusy = true;
+    try { await syncDialogs(client, { deep: false, silent: true }); } catch { /* сеть моргнула */ } finally { resyncBusy = false; }
+  }, 12000);
 }
 
 async function onNewMessage(e: NewMessageEvent) {
   try {
     const m = e.message;
-    if (!m || !e.isPrivate) return; // берём только личные диалоги
+    if (!m) return; // приватность обеспечит проверка PeerUser ниже
     const peer = m.peerId;
     if (!(peer instanceof Api.PeerUser)) return;
     const id = peer.userId.toString();
@@ -170,7 +179,8 @@ async function onNewMessage(e: NewMessageEvent) {
 }
 
 // ---------- синхронизация диалогов ----------
-async function syncDialogs(c: TelegramClient) {
+async function syncDialogs(c: TelegramClient, opts: { deep?: boolean; silent?: boolean } = {}) {
+  const { deep = true, silent = false } = opts;
   try {
     const dialogs = await c.getDialogs({ limit: 30 });
     let n = 0;
@@ -182,19 +192,23 @@ async function syncDialogs(c: TelegramClient) {
       n++;
       const id = u.id.toString();
       peers.set(id, u);
-      const history = await c.getMessages(u, { limit: 8 });
-      const msgs = [...history].reverse()
-        .map(m => ({ ts: m.date * 1000, out: !!m.out, text: msgText(m) }))
-        .filter(m => m.text);
+      let msgs: { ts: number; out: boolean; text: string }[];
+      if (deep) {
+        const history = await c.getMessages(u, { limit: 8 });
+        msgs = [...history].reverse().map(m => ({ ts: m.date * 1000, out: !!m.out, text: msgText(m) })).filter(m => m.text);
+      } else {
+        const lm = d.message; // последнее сообщение диалога — без отдельного запроса истории
+        msgs = lm && msgText(lm) ? [{ ts: lm.date * 1000, out: !!lm.out, text: msgText(lm) }] : [];
+      }
       A.tguSyncDialog(id, userName(u), userPhone(u), msgs, Math.min(d.unreadCount ?? 0, 99));
     }
-    if (n) toast.success(`Личный Telegram: синхронизировано диалогов — ${n}`);
+    if (n && !silent) toast.success(`Личный Telegram: синхронизировано диалогов — ${n}`);
   } catch (err) {
-    toast.error("Личный Telegram: не удалось загрузить диалоги — " + ruErr(err));
+    if (!silent) toast.error("Личный Telegram: не удалось загрузить диалоги — " + ruErr(err));
   }
 }
 
-export async function tguResync() { if (client && tgu().status === "ok") await syncDialogs(client); }
+export async function tguResync() { if (client && tgu().status === "ok") await syncDialogs(client, { deep: true }); }
 
 // ---------- отправка ----------
 export async function tguSend(id: string, text: string): Promise<void> {

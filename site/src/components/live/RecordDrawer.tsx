@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
-import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, entityCfg as entCfg } from "@/lib/store";
+import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, entityCfg as entCfg } from "@/lib/store";
 import { FieldInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { CalendarClock, ListChecks, MessageSquare, MoreVertical, Phone, Trash2, X } from "lucide-react";
+import { CalendarClock, ListChecks, MessageSquare, MoreVertical, Phone, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TASK_ICON: Record<TaskKind, React.ElementType> = { call: Phone, meet: CalendarClock, todo: ListChecks, msg: MessageSquare };
@@ -81,6 +81,8 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
             </div>
           </div>
         )}
+
+        <LinkToPipeline rec={r} />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <section className="px-4 py-3.5">
@@ -203,5 +205,43 @@ function RelatedBlock({ recId }: { recId: string }) {
         ))}
       </div>
     </section>
+  );
+}
+
+// «Подтянуть в воронку»: если какой-то раздел со стадиями умеет ссылаться на этот раздел —
+// одной кнопкой создаём в нём запись, уже связанную с текущей (напр. из клиента → новая сделка).
+function LinkToPipeline({ rec }: { rec: { id: string; entityId: string } }) {
+  const pipe = allEntities().find(en => en.id !== rec.entityId && (en.stages?.length ?? 0) > 0
+    && en.fields.some(fl => fl.type === "relation" && fl.relationTo === rec.entityId));
+  if (!pipe) return null;
+  const field = pipe.fields.find(fl => fl.type === "relation" && fl.relationTo === rec.entityId)!;
+  const linked = getState().records.filter(r => r.entityId === pipe.id && r.values[field.id] === rec.id);
+  const create = () => {
+    const id = A.createRecord(pipe.id, { [field.id]: rec.id });
+    A.openRecord(id);
+  };
+  return (
+    <div className="border-b bg-card/40 px-4 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="eyebrow">{pipe.namePlural} клиента{linked.length ? ` · ${linked.length}` : ""}</span>
+        <Button size="sm" className="h-7 gap-1.5 px-2.5 text-[12px]" onClick={create}>
+          <Plus className="size-3.5" /> {pipe.name}
+        </Button>
+      </div>
+      {linked.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1">
+          {linked.map(r => {
+            const stg = pipe.stages?.find(x => x.id === r.stageId);
+            return (
+              <button key={r.id} onClick={() => A.openRecord(r.id)}
+                className="press flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-left transition-colors hover:border-foreground/25">
+                <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{recTitle(r.id)}</span>
+                {stg && <span className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[10px]" style={{ background: stg.color + "18", borderColor: stg.color + "50" }}><span className="size-1 rounded-full" style={{ background: stg.color }} />{stg.label}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
