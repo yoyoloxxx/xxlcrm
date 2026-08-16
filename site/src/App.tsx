@@ -228,7 +228,7 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.3 · живое: всё, кроме Дашборда — автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.3 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
