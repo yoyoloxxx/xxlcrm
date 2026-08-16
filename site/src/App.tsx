@@ -1,7 +1,7 @@
 // XXLcrm — обёртка приложения (стиль yoyoloxxx Dev).
 // Правило обёртки: интерактивна ТОЛЬКО навигация (сайдбар, вкладки представлений, переключатели экранов).
 // Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById, allEntities, dispCtx, collapseFieldRuns } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
@@ -78,6 +78,8 @@ export default function App() {
   const [page, setPage] = useState<Page>("ent:deals");
   const [newEnt, setNewEnt] = useState(false);
   const [presets, setPresets] = useState(false); // выбор пресета ниши
+  const [presetsOnboarding, setPresetsOnboarding] = useState(false); // пикер открылся сам на пустом пространстве
+  const openPresets = () => { setPresetsOnboarding(false); setPresets(true); };
   const [setupEnt, setSetupEnt] = useState<string | null>(null); // конструктор открыт для раздела
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("xxl-shell-theme") as "dark") === "dark" ? "dark" : "light"; } catch { return "light"; }
@@ -91,6 +93,18 @@ export default function App() {
     const t = window.setTimeout(ensureBirthdayTasks, 1500); // напоминания «поздравить» — после загрузки данных
     const iv = window.setInterval(ensureBirthdayTasks, 3600000);
     return () => { clearTimeout(t); clearInterval(iv); };
+  }, []);
+  // Онбординг: на пустом пространстве сам предлагаем выбрать нишу (один раз, после загрузки данных)
+  const onboardShown = useRef(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (!onboardShown.current && getState().records.length === 0 && getState().authStage === null) {
+        onboardShown.current = true;
+        setPresetsOnboarding(true);
+        setPresets(true);
+      }
+    }, 2200);
+    return () => clearTimeout(t);
   }, []);
   useEffect(() => { if (s.nav) setPage(s.nav.page); }, [s.nav?.tick]); // «открыть диалог» из карточки
   const entId = page.startsWith("ent:") ? page.slice(4) : null;
@@ -119,7 +133,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.5</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.6</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -177,7 +191,7 @@ export default function App() {
             className="press mt-1 inline-flex h-8 items-center justify-start gap-2 rounded-md border border-dashed px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <Plus className="size-3.5" /> Новый раздел
           </button>
-          <button onClick={() => setPresets(true)} title="Готовая настройка под нишу — в один клик"
+          <button onClick={openPresets} title="Готовая настройка под нишу — в один клик"
             className="press inline-flex h-8 items-center justify-start gap-2 rounded-md px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.04] hover:text-foreground">
             <Sparkles className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Шаблон ниши
           </button>
@@ -228,13 +242,13 @@ export default function App() {
           {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
-          {page === "dashboard" && <Dashboard onPresets={() => setPresets(true)} />}
+          {page === "dashboard" && <Dashboard onPresets={openPresets} />}
           {page === "automations" && <AutomationsLive />}
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.5 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.6 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -242,7 +256,7 @@ export default function App() {
       {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
       {s.authStage && <AuthOverlay stage={s.authStage} />}
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
-      <PresetPicker open={presets} onOpenChange={setPresets} hasData={s.records.length > 0} onApplied={() => setPage("ent:deals")} />
+      <PresetPicker open={presets} onOpenChange={o => { setPresets(o); if (!o) setPresetsOnboarding(false); }} hasData={s.records.length > 0} onboarding={presetsOnboarding} onApplied={() => setPage("ent:deals")} />
       {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
       <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
         ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }

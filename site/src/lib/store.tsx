@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule } from "./model";
 import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
-import { presetById, buildPresetData } from "./presets";
+import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset } from "./presets";
 
 interface DataState { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
@@ -485,7 +485,7 @@ export const A = {
   // применить пресет ниши: разделы + воронка + автоматизации + демо-данные одним нажатием.
   // Заменяет структуру и записи целиком (в облаке дифф-сейв удалит старые и запишет новые). Обратимо через undo.
   applyPreset(presetId: string): boolean {
-    const p = presetById(presetId);
+    const p = resolvePreset(presetId);
     if (!p) return false;
     const data = buildPresetData(p);
     pushHistory();
@@ -499,9 +499,18 @@ export const A = {
       s.drawerRecordId = null;
       s.activeChatId = null;
     });
-    toast.success(`Шаблон «${p.label}» применён`, { description: "Разделы, воронка, автоматизации и примеры настроены — можно отменить (Ctrl+Z)" });
+    const desc = p.custom ? "Разделы и автоматизации применены — можно отменить (Ctrl+Z)" : "Разделы, воронка, автоматизации и примеры настроены — можно отменить (Ctrl+Z)";
+    toast.success(`Шаблон «${p.label}» применён`, { description: desc });
     return true;
   },
+  // сохранить текущую структуру (разделы + автоматизации) как свой шаблон — переиспользовать/поделиться устройством
+  savePresetFromCurrent(name: string): string {
+    const p = saveCustomPreset(name, st.entities, st.automations);
+    emit(); // чтобы список «Мои шаблоны» перечитался
+    toast.success(`Шаблон «${p.label}» сохранён`, { description: "Появился в «Шаблон ниши» → Мои шаблоны" });
+    return p.id;
+  },
+  removeCustomPreset(id: string) { deleteCustomPreset(id); emit(); toast("Шаблон удалён"); },
   entToggleStages(id: string, on: boolean) {
     mut(s => {
       const e = s.entities.find(x => x.id === id); if (!e) return;

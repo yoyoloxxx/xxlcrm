@@ -1,26 +1,60 @@
-// Быстрый старт: выбор пресета ниши. Один клик — готовые разделы, воронка, автоматизации и примеры.
+// Быстрый старт: пресеты ниш + «Мои шаблоны». Один клик — готовые разделы, воронка, автоматизации и примеры.
+// Онбординг-режим: показывается сам на пустом пространстве, с кнопкой «Позже».
 import { useState } from "react";
-import { A } from "@/lib/store";
-import { PRESETS, type Preset } from "@/lib/presets";
+import { A, useApp } from "@/lib/store";
+import { PRESETS, loadCustomPresets, type Preset } from "@/lib/presets";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Sparkles, ArrowLeft, Check } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Sparkles, ArrowLeft, Check, Trash2, Save } from "lucide-react";
 
-export function PresetPicker({ open, onOpenChange, hasData, onApplied }: {
-  open: boolean; onOpenChange: (o: boolean) => void; hasData: boolean; onApplied: () => void;
-}) {
-  const [confirm, setConfirm] = useState<Preset | null>(null);
-  const apply = (p: Preset) => { A.applyPreset(p.id); setConfirm(null); onOpenChange(false); onApplied(); };
-  const pick = (p: Preset) => (hasData ? setConfirm(p) : apply(p));
+function PresetCard({ p, onPick, onDelete }: { p: Preset; onPick: () => void; onDelete?: () => void }) {
+  const stages = p.entities.find(e => (e.stages?.length ?? 0) > 0)?.stages?.length ?? 0;
   return (
-    <Dialog open={open} onOpenChange={o => { onOpenChange(o); if (!o) setConfirm(null); }}>
+    <div className="group relative">
+      <button onClick={onPick}
+        className="press flex w-full items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-foreground/30">
+        <span className="grid size-10 shrink-0 place-items-center rounded-lg text-[20px]" style={{ background: p.accent + "1f" }}>{p.emoji}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13.5px] font-medium">{p.label}</span>
+          <span className="block truncate text-[11.5px] text-muted-foreground">{p.tagline}</span>
+          <span className="font-mono2 mt-0.5 block text-[10px] text-muted-foreground/70">{stages} стадий · {p.rules.length} автоматизаций{p.custom ? "" : " · примеры"}</span>
+        </span>
+        {!onDelete && <Check className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-70" />}
+      </button>
+      {onDelete && (
+        <button onClick={onDelete} title="Удалить шаблон"
+          className="absolute right-2 top-2 grid size-6 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100">
+          <Trash2 className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplied }: {
+  open: boolean; onOpenChange: (o: boolean) => void; hasData: boolean; onboarding?: boolean; onApplied: () => void;
+}) {
+  useApp(); // подписка: «Мои шаблоны» перечитываются после сохранения/удаления
+  const [confirm, setConfirm] = useState<Preset | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState("");
+  const custom = loadCustomPresets();
+
+  const apply = (p: Preset) => { A.applyPreset(p.id); onApplied(); close(false); };
+  const pick = (p: Preset) => (hasData ? setConfirm(p) : apply(p));
+  const doSave = () => { if (!name.trim()) return; A.savePresetFromCurrent(name.trim()); setName(""); setSaving(false); };
+  const close = (o: boolean) => { onOpenChange(o); if (!o) { setConfirm(null); setSaving(false); setName(""); } };
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-lg">
         {confirm ? (
           <>
             <DialogHeader>
               <DialogTitle className="text-[15px]">Применить «{confirm.label}»?</DialogTitle>
               <DialogDescription className="text-[12.5px] leading-relaxed">
-                Это заменит текущие разделы, воронку и записи демонстрационными примерами ниши.
+                Это заменит текущие разделы, воронку и записи{confirm.custom ? "" : " демонстрационными примерами ниши"}.
                 Действие можно отменить сразу через Ctrl+Z.
               </DialogDescription>
             </DialogHeader>
@@ -33,29 +67,43 @@ export function PresetPicker({ open, onOpenChange, hasData, onApplied }: {
           <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-[15px]">
-                <Sparkles className="size-4" style={{ color: "var(--brass-ink)" }} /> Быстрый старт: выберите нишу
+                <Sparkles className="size-4" style={{ color: "var(--brass-ink)" }} /> {onboarding ? "С чего начнём?" : "Быстрый старт: выберите нишу"}
               </DialogTitle>
               <DialogDescription className="text-[12.5px] leading-relaxed">
-                Готовая настройка под ваш бизнес — разделы, воронка, автоматизации и примеры для наглядности.
+                Выберите профиль бизнеса — соберём разделы, воронку, автоматизации и примеры за один клик.
                 Всё потом свободно меняется под себя.
               </DialogDescription>
             </DialogHeader>
-            <div className="flex flex-col gap-2">
-              {PRESETS.map(p => {
-                const stages = p.entities.find(e => (e.stages?.length ?? 0) > 0)?.stages?.length ?? 0;
-                return (
-                  <button key={p.id} onClick={() => pick(p)}
-                    className="press group flex items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-foreground/30">
-                    <span className="grid size-10 shrink-0 place-items-center rounded-lg text-[20px]" style={{ background: p.accent + "1f" }}>{p.emoji}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13.5px] font-medium">{p.label}</span>
-                      <span className="block truncate text-[11.5px] text-muted-foreground">{p.tagline}</span>
-                      <span className="font-mono2 mt-0.5 block text-[10px] text-muted-foreground/70">{stages} стадий · {p.rules.length} автоматизаций · примеры</span>
-                    </span>
-                    <Check className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-70" />
-                  </button>
-                );
-              })}
+
+            <div className="-mr-1 flex max-h-[50vh] flex-col gap-2 overflow-y-auto pr-1">
+              {custom.length > 0 && (
+                <>
+                  <div className="eyebrow">Мои шаблоны</div>
+                  {custom.map(p => <PresetCard key={p.id} p={p} onPick={() => pick(p)} onDelete={() => A.removeCustomPreset(p.id)} />)}
+                  <div className="eyebrow mt-2">Готовые ниши</div>
+                </>
+              )}
+              {PRESETS.map(p => <PresetCard key={p.id} p={p} onPick={() => pick(p)} />)}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+              {saving ? (
+                <div className="flex flex-1 gap-2">
+                  <Input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && doSave()}
+                    placeholder="Название шаблона…" className="h-9 text-[13px]" />
+                  <Button className="h-9" disabled={!name.trim()} onClick={doSave}>Сохранить</Button>
+                </div>
+              ) : (
+                <button onClick={() => setSaving(true)}
+                  className="press inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+                  <Save className="size-3.5" /> Сохранить текущую настройку как шаблон
+                </button>
+              )}
+              {onboarding && !saving && (
+                <button onClick={() => close(false)} className="press text-[12px] text-muted-foreground transition-colors hover:text-foreground">
+                  Позже — настрою сам
+                </button>
+              )}
             </div>
           </>
         )}

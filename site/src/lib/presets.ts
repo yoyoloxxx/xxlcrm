@@ -33,6 +33,7 @@ export interface Preset {
   tagline: string;
   emoji: string;
   accent: string;
+  custom?: boolean;        // сохранённый пользователем шаблон (без демо-данных, живёт в localStorage)
   entities: EntityCfg[];
   rules: PresetRule[];
   clients: SampleClient[];
@@ -193,6 +194,27 @@ export const PRESETS: Preset[] = [
 ];
 
 export const presetById = (id: string) => PRESETS.find(p => p.id === id);
+
+// ---------- пользовательские шаблоны (сохранённые настройки) ----------
+// Живут на устройстве (localStorage): «сохранить мою настройку как шаблон» и применить её снова/в другом пространстве.
+const CUSTOM_KEY = "xxlcrm-presets-v1";
+export function loadCustomPresets(): Preset[] {
+  try { const raw = window.localStorage.getItem(CUSTOM_KEY); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+function saveCustomList(list: Preset[]) { try { window.localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)); } catch { /* нет хранилища — живём в RAM */ } }
+export function saveCustomPreset(label: string, entities: EntityCfg[], rules: Rule[]): Preset {
+  const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+  const p: Preset = {
+    id: "custom_" + uid("p"), label: label.trim() || "Мой шаблон", tagline: "Ваш сохранённый шаблон", emoji: "⭐", accent: "#BC9F5C",
+    custom: true, entities: clone(entities), rules: clone(rules), clients: [], deals: [],
+  };
+  const list = loadCustomPresets().filter(x => x.label !== p.label); // одноимённый — перезаписываем
+  list.unshift(p);
+  saveCustomList(list.slice(0, 24));
+  return p;
+}
+export function deleteCustomPreset(id: string) { saveCustomList(loadCustomPresets().filter(p => p.id !== id)); }
+export const resolvePreset = (id: string): Preset | undefined => presetById(id) ?? loadCustomPresets().find(p => p.id === id);
 
 // материализация пресета в состояние: свежие id у записей/правил, связка сделок с клиентами по ключу
 export function buildPresetData(p: Preset): { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; activities: Activity[]; tasks: Task[]; chats: Chat[] } {
