@@ -52,6 +52,29 @@ export const defaultIntegrations = (): Integrations => ({
 });
 export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : "Instagram");
 
+// ---------- конструктор разделов ----------
+export const FIELD_TYPES: { type: FieldType; label: string; group: string }[] = [
+  { type: "text", label: "Текст", group: "База" },
+  { type: "textarea", label: "Длинный текст", group: "База" },
+  { type: "number", label: "Число", group: "База" },
+  { type: "money", label: "Деньги", group: "База" },
+  { type: "phone", label: "Телефон", group: "Контакты" },
+  { type: "email", label: "Email", group: "Контакты" },
+  { type: "url", label: "Ссылка", group: "Контакты" },
+  { type: "date", label: "Дата", group: "Время" },
+  { type: "datetime", label: "Дата и время", group: "Время" },
+  { type: "select", label: "Список (выбор)", group: "Выбор" },
+  { type: "user", label: "Сотрудник", group: "Связи" },
+  { type: "relation", label: "Связь с разделом", group: "Связи" },
+];
+export const PALETTE = ["#8A8578", "#BC9F5C", "#7D8A5C", "#B0725A", "#6E8B8A", "#6E8B4F", "#A8543F", "#5C7A9E", "#8B6E86", "#A8547C"];
+export const defaultStages = (): Stage[] => [
+  { id: uid("s"), label: "Новая", color: "#8A8578", kind: "open" },
+  { id: uid("s"), label: "В работе", color: "#BC9F5C", kind: "open" },
+  { id: uid("s"), label: "Успех", color: "#6E8B4F", kind: "won" },
+  { id: uid("s"), label: "Отказ", color: "#A8543F", kind: "lost" },
+];
+
 let idc = 0;
 export const uid = (p = "id") => `${p}_${Date.now().toString(36)}${(++idc).toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
 export const DAY = 86400000;

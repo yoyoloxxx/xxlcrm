@@ -4,11 +4,11 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User } from "./model";
-import { uid, now, displayValue, defaultIntegrations, channelName } from "./model";
-import { ENTITIES, USERS, entityCfg, seed, DEFAULT_TEMPLATES } from "./data";
+import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage } from "./model";
+import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, PALETTE } from "./model";
+import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
 
-interface DataState { records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
+interface DataState { entities: EntityCfg[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
@@ -40,6 +40,7 @@ const persistence = {
       ints.tgUser.status = ints.tgUser.session ? "connecting" : "off";
       ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
       return {
+        entities: Array.isArray(d.entities) && d.entities.length ? d.entities : clone(ENTITIES), // миграция v2→v3
         records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [],
         chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
         replyTemplates: Array.isArray(d.replyTemplates) && d.replyTemplates.length ? d.replyTemplates : DEFAULT_TEMPLATES,
@@ -50,7 +51,7 @@ const persistence = {
   save(s: DataState) {
     try {
       window.localStorage.setItem(LS_KEY, JSON.stringify({
-        v: 2, records: s.records, tasks: s.tasks, activities: s.activities,
+        v: 3, entities: s.entities, records: s.records, tasks: s.tasks, activities: s.activities,
         chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
       }));
     } catch { /* памяти нет — живём в RAM */ }
@@ -73,6 +74,7 @@ function ensurePos(records: Rec[]) {
   }
 }
 
+export const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 const INT_KEY = "xxlcrm-ints-v1"; // интеграции живут на устройстве отдельно: данные в облаке общие, каналы личные
 function normalizeInts(raw: unknown): Integrations {
   const ints = { ...defaultIntegrations(), ...((raw as Integrations) ?? {}) } as Integrations;
@@ -84,7 +86,7 @@ function normalizeInts(raw: unknown): Integrations {
   ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
   return ints;
 }
-const initial: DataState = persistence.load() ?? { ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 ensurePos(initial.records);
 const st: State = {
@@ -121,7 +123,7 @@ function mut(fn: (s: State) => void) { fn(st); emit(); }
 // ---------- undo (снимки перед опасными действиями) ----------
 const history: string[] = [];
 function pushHistory() {
-  history.push(JSON.stringify({ records: st.records, tasks: st.tasks, activities: st.activities }));
+  history.push(JSON.stringify({ entities: st.entities, records: st.records, tasks: st.tasks, activities: st.activities }));
   if (history.length > 25) history.shift();
 }
 export function undo(): boolean {
@@ -136,6 +138,8 @@ export function undo(): boolean {
 }
 
 // ---------- селекторы ----------
+export const entityCfg = (id: string): EntityCfg => st.entities.find(e => e.id === id) ?? st.entities[0];
+export const allEntities = () => st.entities;
 export const recById = (id?: string | null) => st.records.find(r => r.id === id);
 export const recordsOf = (entityId: string) => st.records.filter(r => r.entityId === entityId);
 export const userName = (id?: string) => st.users.find(u => u.id === id)?.name ?? "";
@@ -341,6 +345,105 @@ export const A = {
   tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
   tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
   tplDelete(id: string) { mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); },
+  // ---------- конструктор разделов ----------
+  entAdd(name: string, withPipeline: boolean): string {
+    const id = uid("e");
+    const titleId = uid("f");
+    const ent: EntityCfg = {
+      id, name: name.trim() || "Запись", namePlural: name.trim() || "Раздел", icon: "folder", titleFieldId: titleId,
+      fields: [
+        { id: titleId, label: "Название", type: "text", inTable: true, required: true },
+        { id: uid("f"), label: "Ответственный", type: "user", inTable: true },
+        { id: uid("f"), label: "Заметки", type: "textarea", inTable: false },
+      ],
+      stages: withPipeline ? defaultStages() : undefined,
+    };
+    mut(s => s.entities.push(ent));
+    toast.success(`Раздел «${ent.namePlural}» создан`, { description: "Настройте поля и стадии под себя" });
+    return id;
+  },
+  entPatch(id: string, patch: Partial<Pick<EntityCfg, "name" | "namePlural" | "icon">>) {
+    mut(s => { const e = s.entities.find(x => x.id === id); if (e) Object.assign(e, patch); });
+  },
+  entToggleStages(id: string, on: boolean) {
+    mut(s => {
+      const e = s.entities.find(x => x.id === id); if (!e) return;
+      if (on && !e.stages?.length) {
+        e.stages = defaultStages();
+        const first = e.stages[0].id;
+        s.records.forEach((r, i) => { if (r.entityId === id) { r.stageId = first; r.stageAt = now(); r.pos = (i + 1) * 1000; } });
+      } else if (!on) {
+        e.stages = undefined;
+        s.records.forEach(r => { if (r.entityId === id) r.stageId = undefined; });
+      }
+    });
+  },
+  entDelete(id: string): boolean {
+    const used = st.entities.find(e => e.id !== id && e.fields.some(f => f.type === "relation" && f.relationTo === id));
+    if (used) { toast.error(`Сначала удалите поле-связь в разделе «${used.namePlural}»`); return false; }
+    if (st.entities.length <= 1) { toast.error("Нельзя удалить последний раздел"); return false; }
+    pushHistory();
+    mut(s => {
+      const ids = new Set(s.records.filter(r => r.entityId === id).map(r => r.id));
+      s.records = s.records.filter(r => r.entityId !== id);
+      s.tasks = s.tasks.filter(t => !t.recordId || !ids.has(t.recordId));
+      s.activities = s.activities.filter(a => !ids.has(a.recordId));
+      s.chats.forEach(c => { if (c.recordId && ids.has(c.recordId)) c.recordId = undefined; });
+      if (s.drawerRecordId && ids.has(s.drawerRecordId)) s.drawerRecordId = null;
+      s.entities = s.entities.filter(e => e.id !== id);
+    });
+    toast("Раздел удалён вместе с записями", { description: "Ctrl+Z вернёт" });
+    return true;
+  },
+  fieldAdd(entityId: string, f: Omit<Field, "id">): string {
+    const id = uid("f");
+    mut(s => { s.entities.find(e => e.id === entityId)?.fields.push({ ...f, id }); });
+    return id;
+  },
+  fieldUpdate(entityId: string, fieldId: string, patch: Partial<Field>) {
+    mut(s => { const f = s.entities.find(e => e.id === entityId)?.fields.find(x => x.id === fieldId); if (f) Object.assign(f, patch); });
+  },
+  fieldDelete(entityId: string, fieldId: string) {
+    const e = st.entities.find(x => x.id === entityId);
+    if (!e || e.titleFieldId === fieldId) { toast.error("Поле-заголовок удалить нельзя"); return; }
+    mut(s => { const en = s.entities.find(x => x.id === entityId)!; en.fields = en.fields.filter(f => f.id !== fieldId); });
+  },
+  fieldMove(entityId: string, fieldId: string, dir: -1 | 1) {
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId); if (!e) return;
+      const i = e.fields.findIndex(f => f.id === fieldId); const j = i + dir;
+      if (i < 0 || j < 0 || j >= e.fields.length) return;
+      [e.fields[i], e.fields[j]] = [e.fields[j], e.fields[i]];
+    });
+  },
+  stageAdd(entityId: string, label: string) {
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId); if (!e) return;
+      if (!e.stages) e.stages = [];
+      e.stages.push({ id: uid("s"), label: label.trim() || "Стадия", color: PALETTE[e.stages.length % PALETTE.length], kind: "open" });
+    });
+  },
+  stageUpdate(entityId: string, stageId: string, patch: Partial<Stage>) {
+    mut(s => { const stg = s.entities.find(x => x.id === entityId)?.stages?.find(x => x.id === stageId); if (stg) Object.assign(stg, patch); });
+  },
+  stageDelete(entityId: string, stageId: string) {
+    const e = st.entities.find(x => x.id === entityId);
+    if (!e?.stages || e.stages.length <= 1) { toast.error("Должна остаться хотя бы одна стадия"); return; }
+    mut(s => {
+      const en = s.entities.find(x => x.id === entityId)!;
+      en.stages = en.stages!.filter(x => x.id !== stageId);
+      const first = en.stages[0];
+      s.records.forEach(r => { if (r.entityId === entityId && r.stageId === stageId) { r.stageId = first.id; r.stageAt = now(); } });
+    });
+  },
+  stageMove(entityId: string, stageId: string, dir: -1 | 1) {
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId); if (!e?.stages) return;
+      const i = e.stages.findIndex(x => x.id === stageId); const j = i + dir;
+      if (i < 0 || j < 0 || j >= e.stages.length) return;
+      [e.stages[i], e.stages[j]] = [e.stages[j], e.stages[i]];
+    });
+  },
   tildaLead(fields: Record<string, string>) {
     const low = (k: string) => k.toLowerCase();
     const findVal = (keys: string[]) => Object.entries(fields).find(([k]) => keys.some(kk => low(k).includes(kk)))?.[1];
@@ -371,7 +474,7 @@ export function handleIncoming(ext: ChatExt, name: string, channel: Channel, tex
 
 // ---------- мост в облако (использует cloud.ts) ----------
 export function enterCloud(
-  data: { records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
+  data: { entities: EntityCfg[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
   ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
 ) {
   Object.assign(st, data);
@@ -386,4 +489,4 @@ export function applyRemote(fn: (s: State) => void) { fn(st); version++; listene
 export function setAuthStage(v: "auth" | "ws" | null) { mut(s => { s.authStage = v; }); }
 export function setWsMeta(name: string, invite: string) { mut(s => { s.wsName = name; s.inviteCode = invite; }); }
 
-export { ENTITIES, USERS, entityCfg, channelName };
+export { USERS, channelName };

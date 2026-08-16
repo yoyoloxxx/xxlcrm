@@ -12,15 +12,17 @@ import { IntegrationsLive, TemplatesLive } from "@/components/live/SettingsLive"
 import { initIntegrations } from "@/lib/integrations";
 import { cloudBoot } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
+import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
+import { EntIcon } from "@/components/live/icons";
 import {
-  Bell, Briefcase, Building2, Cake, Calendar, CalendarClock, Copy, LogIn,
+  Bell, Briefcase, Cake, Calendar, CalendarClock, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks, ListFilter,
   MessageSquare, Moon, Package, PanelLeft, Phone, Plus,
-  Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Users, Zap,
+  Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Page = "myday" | "tasks" | "inbox" | "deals" | "companies" | "contacts" | "dashboard" | "automations" | "settings";
+type Page = string; // "myday" | "tasks" | ... | "ent:<entityId>" — разделы теперь динамические
 
 const NAV: { id: Page; label: string; icon: React.ElementType; badge?: () => number }[] = [
   { id: "myday", label: "Мой день", icon: SunMedium },
@@ -29,14 +31,9 @@ const NAV: { id: Page; label: string; icon: React.ElementType; badge?: () => num
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "automations", label: "Автоматизации", icon: Zap },
 ];
-const SECTIONS: { id: Page; label: string; icon: React.ElementType }[] = [
-  { id: "deals", label: "Сделки", icon: Briefcase },
-  { id: "companies", label: "Компании", icon: Building2 },
-  { id: "contacts", label: "Контакты", icon: Users },
-];
-const TITLES: Record<Page, string> = {
-  myday: "Мой день", tasks: "Задачи", inbox: "Входящие", deals: "Сделки", companies: "Компании",
-  contacts: "Контакты", dashboard: "Дашборд", automations: "Автоматизации", settings: "Настройки",
+const TITLES: Record<string, string> = {
+  myday: "Мой день", tasks: "Задачи", inbox: "Входящие",
+  dashboard: "Дашборд", automations: "Автоматизации", settings: "Настройки",
 };
 
 // Бездействующая кнопка: выглядит и нажимается как настоящая, но ничего не делает (правило обёртки)
@@ -81,8 +78,9 @@ function Avatar({ n, hue, size = 22 }: { n: string; hue: number; size?: number }
 
 export default function App() {
   const s = useApp();
-  const [page, setPage] = useState<Page>("deals");
-  const [dealsView, setDealsView] = useState<DealsViewId>("kanban");
+  const [page, setPage] = useState<Page>("ent:deals");
+  const [newEnt, setNewEnt] = useState(false);
+  const [setupEnt, setSetupEnt] = useState<string | null>(null); // конструктор открыт для раздела
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("xxl-shell-theme") as "dark") === "dark" ? "dark" : "light"; } catch { return "light"; }
   });
@@ -91,6 +89,10 @@ export default function App() {
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
   useEffect(() => { initIntegrations(); void cloudBoot(); }, []); // каналы + вход в облако, если сессия сохранена
+  const entId = page.startsWith("ent:") ? page.slice(4) : null;
+  useEffect(() => {
+    if (entId && !s.entities.some(e => e.id === entId)) setPage(s.entities.length ? "ent:" + s.entities[0].id : "myday");
+  }, [entId, s.entities]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
@@ -113,7 +115,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.6</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.7</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -154,19 +156,23 @@ export default function App() {
 
         <div className="mt-5 flex items-center justify-between pl-[22px] pr-3">
           <span className="eyebrow">Разделы</span>
-          <Idle className="h-6 w-6 justify-center border-0 px-0"><Plus className="size-3.5" /></Idle>
+          <button onClick={() => setNewEnt(true)} title="Новый раздел"
+            className="press grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"><Plus className="size-3.5" /></button>
         </div>
-        <nav className="mt-1 flex flex-col gap-px px-3">
-          {SECTIONS.map(sec => (
-            <button key={sec.id} onClick={() => setPage(sec.id)}
+        <nav className="mt-1 flex flex-col gap-px overflow-y-auto px-3">
+          {s.entities.map(sec => (
+            <button key={sec.id} onClick={() => setPage("ent:" + sec.id)}
               className={cn("press flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors duration-150",
-                page === sec.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
-              <sec.icon className="size-4" />
-              <span className="flex-1">{sec.label}</span>
+                page === "ent:" + sec.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
+              <EntIcon name={sec.icon} className="size-4" />
+              <span className="min-w-0 flex-1 truncate">{sec.namePlural}</span>
               <span className="font-mono2 text-[10.5px] text-muted-foreground/70">{recordsOf(sec.id).length}</span>
             </button>
           ))}
-          <Idle className="mt-1 justify-start gap-2 border-dashed px-2.5 text-[12.5px]"><Plus className="size-3.5" /> Новый раздел</Idle>
+          <button onClick={() => setNewEnt(true)}
+            className="press mt-1 inline-flex h-8 items-center justify-start gap-2 rounded-md border border-dashed px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
+            <Plus className="size-3.5" /> Новый раздел
+          </button>
         </nav>
 
         <div className="mt-auto border-t px-3 py-2.5">
@@ -213,22 +219,22 @@ export default function App() {
           {page === "myday" && <MyDay />}
           {page === "tasks" && <TasksScreen />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
-          {page === "deals" && <Deals view={dealsView} setView={setDealsView} />}
-          {page === "companies" && <Companies />}
-          {page === "contacts" && <Contacts />}
+          {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
           {page === "dashboard" && <Dashboard />}
           {page === "automations" && <Automations />}
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.6 · живое: аккаунты и команда (облако), Сделки, Компании, Контакты, Входящие + каналы · остальное — заглушки</span>
-          <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{TITLES[page]}</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.7 · живое: конструктор разделов, аккаунты и команда, все разделы, Входящие + каналы · остальное — заглушки</span>
+          <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
 
       {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
       {s.authStage && <AuthOverlay stage={s.authStage} />}
+      <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
+      {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
       <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
         ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
         : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" } }} />
@@ -310,72 +316,52 @@ function MyDay() {
   );
 }
 
-type DealsViewId = "kanban" | "table" | "calendar";
+type ViewId = "kanban" | "table" | "calendar";
 
-function ViewTabs({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
-  return (
-    <div className="flex items-center gap-0.5">
-      {([["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]] as const).map(([id, label, Ic]) => (
-        <button key={id} onClick={() => setView(id)}
-          className={cn("press relative flex items-center gap-1.5 px-2.5 py-2 text-[12.5px] transition-colors duration-150", view === id ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
-          <Ic className="size-3.5" /> {label}
-          {view === id && <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full" style={{ background: "hsl(var(--primary))" }} />}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Deals({ view, setView }: { view: DealsViewId; setView: (v: DealsViewId) => void }) {
-  const e = entityCfg("deals");
-  const count = recordsOf("deals").length;
+function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) {
+  const e = entityCfg(id);
+  const hasStages = !!e.stages?.length;
+  const [view, setView] = useState<ViewId>(hasStages ? "kanban" : "table");
+  const count = recordsOf(id).length;
+  const tabs: [ViewId, string, React.ElementType][] = hasStages
+    ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ...(id === "deals" ? [["calendar", "Календарь", Calendar] as [ViewId, string, React.ElementType]] : [])]
+    : [["table", "Таблица", Table2]];
+  const activeView = tabs.some(t => t[0] === view) ? view : tabs[0][0];
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-5 pt-4">
-        <ScreenHead title="Сделки" sub={`${count} записей · воронка «Продажа» · живой раздел`}>
-          <Idle title="Конструктор раздела оживёт на шаге 3"><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
-          <Idle title="Импорт оживёт вместе с конструктором"><FileUp className="size-3" /> Импорт</Idle>
-          <button onClick={() => A.openRecord(A.createRecord("deals", {}))}
-            className="press inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground transition-colors duration-150 hover:opacity-90">
-            <Plus className="size-3.5" /> Сделка
+        <ScreenHead title={e.namePlural} sub={`${count} записей · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
+          <button onClick={openSetup}
+            className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
+            <SlidersHorizontal className="size-3" /> Настроить раздел
           </button>
-        </ScreenHead>
-        <div className="mt-1 flex items-center justify-between">
-          <ViewTabs view={view} setView={setView} />
-          <div className="flex items-center gap-1.5 pb-1.5">
-            <Idle title="Фильтры оживут на шаге 3"><ListFilter className="size-3" /> Фильтры</Idle>
-            <Idle title="Фильтр по ответственному оживёт на шаге 3">Мои</Idle>
-          </div>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {view === "kanban" && <KanbanLive entity={e} />}
-        {view === "table" && <TableLive entity={e} />}
-        {view === "calendar" && <DealsCalendar />}
-      </div>
-    </div>
-  );
-}
-
-function Companies() { return <LiveSection id="companies" title="Компании" />; }
-
-function Contacts() { return <LiveSection id="contacts" title="Контакты" />; }
-
-function LiveSection({ id, title }: { id: string; title: string }) {
-  const e = entityCfg(id);
-  const count = recordsOf(id).length;
-  return (
-    <div className="flex h-full flex-col">
-      <div className="border-b px-5 pb-2 pt-4">
-        <ScreenHead title={title} sub={`${count} записей · живой раздел`}>
-          <Idle title="Конструктор раздела оживёт на шаге 3"><SlidersHorizontal className="size-3" /> Настроить раздел</Idle>
+          <Idle title="Импорт CSV — следующая итерация"><FileUp className="size-3" /> Импорт</Idle>
           <button onClick={() => A.openRecord(A.createRecord(id, {}))}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground transition-colors duration-150 hover:opacity-90">
             <Plus className="size-3.5" /> {e.name}
           </button>
         </ScreenHead>
+        <div className="mt-1 flex items-center justify-between">
+          <div className="flex items-center gap-0.5">
+            {tabs.map(([tid, label, Ic]) => (
+              <button key={tid} onClick={() => setView(tid)}
+                className={cn("press relative flex items-center gap-1.5 px-2.5 py-2 text-[12.5px] transition-colors duration-150", activeView === tid ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
+                <Ic className="size-3.5" /> {label}
+                {activeView === tid && <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full" style={{ background: "hsl(var(--primary))" }} />}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 pb-1.5">
+            <Idle title="Фильтры — следующая итерация"><ListFilter className="size-3" /> Фильтры</Idle>
+            <Idle title="Фильтр по ответственному — следующая итерация">Мои</Idle>
+          </div>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto"><TableLive entity={e} /></div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {activeView === "kanban" && hasStages && <KanbanLive entity={e} />}
+        {activeView === "table" && <TableLive entity={e} />}
+        {activeView === "calendar" && <DealsCalendar />}
+      </div>
     </div>
   );
 }

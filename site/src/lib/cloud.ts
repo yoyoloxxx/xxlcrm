@@ -3,16 +3,17 @@
 // подписывается на cloudHooks.save и превращает изменения стора в точечные upsert/delete.
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
-import type { Rec, Task, Activity, Chat, ReplyTemplate, User } from "./model";
+import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg } from "./model";
 import { uid } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks } from "./store";
-import { DEFAULT_TEMPLATES } from "./data";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone } from "./store";
+import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { toast } from "sonner";
 
 let wsId: string | null = null;
 let channel: RealtimeChannel | null = null;
 
 // снимки последнего сохранённого состояния: id → канонический JSON модели (для диффа и гашения эха)
+let entitiesSnap = ""; // канон структуры разделов (ws_config)
 const snap = {
   records: new Map<string, string>(),
   tasks: new Map<string, string>(),
@@ -124,7 +125,7 @@ export async function joinWs(code: string, displayName: string): Promise<string 
 // ---------- загрузка пространства ----------
 async function openWorkspace(id: string, meId: string): Promise<void> {
   wsId = id;
-  const [recs, tasks, acts, chats, tpls, mems, wss] = await Promise.all([
+  const [recs, tasks, acts, chats, tpls, mems, wss, cfg] = await Promise.all([
     supa.from("records").select("*").eq("workspace_id", id),
     supa.from("tasks").select("*").eq("workspace_id", id),
     supa.from("activities").select("*").eq("workspace_id", id),
@@ -132,11 +133,14 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
     supa.from("reply_templates").select("*").eq("workspace_id", id),
     supa.from("members").select("*").eq("workspace_id", id),
     supa.from("workspaces").select("name, invite_code").eq("id", id).single(),
+    supa.from("ws_config").select("entities").eq("workspace_id", id).maybeSingle(),
   ]);
   const err = recs.error ?? tasks.error ?? acts.error ?? chats.error ?? tpls.error ?? mems.error ?? wss.error;
   if (err) { toast.error("Не удалось загрузить пространство: " + err.message.slice(0, 100)); return; }
 
+  const cfgEnts = (cfg.data?.entities as EntityCfg[] | null) ?? null;
   const data = {
+    entities: cfgEnts?.length ? cfgEnts : clone(ENTITIES),
     records: (recs.data ?? []).map(M.records.fromRow),
     tasks: (tasks.data ?? []).map(M.tasks.fromRow),
     activities: (acts.data ?? []).map(M.activities.fromRow).sort((a, b) => a.ts - b.ts),
@@ -148,6 +152,8 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   enterCloud(data, { wsId: id, wsName: String(wss.data?.name ?? "Пространство"), inviteCode: String(wss.data?.invite_code ?? ""), users, meId });
 
   // снимки для диффа
+  entitiesSnap = canon(data.entities);
+  if (!cfgEnts?.length) await supa.from("ws_config").upsert({ workspace_id: id, entities: data.entities, updated_at: Date.now() });
   snap.records = new Map(data.records.map(r => [r.id, canon(r)]));
   snap.tasks = new Map(data.tasks.map(t => [t.id, canon(t)]));
   snap.activities = new Map(data.activities.map(a => [a.id, canon(a)]));
@@ -171,6 +177,12 @@ async function doSave(): Promise<void> {
   saving = true;
   try {
     const st = getState();
+    const entJ = canon(st.entities);
+    if (entJ !== entitiesSnap) {
+      const { error } = await supa.from("ws_config").upsert({ workspace_id: wsId, entities: st.entities, updated_at: Date.now() });
+      if (error) throw new Error("ws_config: " + error.message);
+      entitiesSnap = entJ;
+    }
     const collections: { table: keyof typeof snap; items: { id: string }[]; toRow: (x: never) => Row }[] = [
       { table: "records", items: st.records, toRow: M.records.toRow as (x: never) => Row },
       { table: "tasks", items: st.tasks, toRow: M.tasks.toRow as (x: never) => Row },
@@ -215,6 +227,15 @@ function subscribeRealtime(id: string): void {
     channel.on("postgres_changes", { event: "*", schema: "public", table: t, filter: `workspace_id=eq.${id}` }, payload => onRemote(t, payload.eventType, (payload.new ?? payload.old) as Row));
   }
   channel.on("postgres_changes", { event: "*", schema: "public", table: "members", filter: `workspace_id=eq.${id}` }, () => { void refreshMembers(); });
+  channel.on("postgres_changes", { event: "*", schema: "public", table: "ws_config", filter: `workspace_id=eq.${id}` }, payload => {
+    const inc = ((payload.new as Row | null)?.entities as EntityCfg[] | undefined) ?? undefined;
+    if (!inc?.length) return;
+    const j = canon(inc);
+    if (j === entitiesSnap) return; // эхо
+    entitiesSnap = j;
+    applyRemote(s => { s.entities = inc; });
+    toast("Структура разделов обновлена коллегой");
+  });
   channel.subscribe();
 }
 
