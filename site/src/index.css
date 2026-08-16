@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* XXLcrm — обёртка приложения. Стиль: yoyoloxxx Dev.
+   Тёплый монохром + латунь #BC9F5C (≤10% поверхности), Geist + Geist Mono,
+   линии вместо коробок, зерно, каскадное появление, физика нажатий. */
+
+@layer base {
+  :root {
+    --background: 45 36% 97.5%;
+    --foreground: 40 16% 12%;
+    --card: 45 36% 98.5%;
+    --card-foreground: 40 16% 12%;
+    --popover: 45 36% 98.5%;
+    --popover-foreground: 40 16% 12%;
+    --primary: 41 46% 40%;
+    --primary-foreground: 45 60% 97%;
+    --secondary: 44 22% 92.5%;
+    --secondary-foreground: 40 16% 15%;
+    --muted: 44 20% 93.5%;
+    --muted-foreground: 40 8% 44%;
+    --accent: 43 30% 90%;
+    --accent-foreground: 40 16% 13%;
+    --destructive: 8 58% 46%;
+    --destructive-foreground: 45 60% 97%;
+    --border: 43 16% 86.5%;
+    --input: 43 16% 84%;
+    --ring: 41 46% 48%;
+    --radius: 0.4rem;
+
+    --brass: 42 42% 55%;
+    --brass-ink: hsl(41 46% 33%);
+    --sidebar: 44 24% 95.5%;
+    --hairline: hsl(43 16% 88%);
+
+    --kanban-col: hsl(44 22% 94.5%);
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  }
+
+  [data-theme="dark"] {
+    --background: 40 11% 9.5%;
+    --foreground: 43 20% 90%;
+    --card: 40 10% 12.5%;
+    --card-foreground: 43 20% 90%;
+    --popover: 40 10% 13%;
+    --popover-foreground: 43 20% 90%;
+    --primary: 42 46% 52%;
+    --primary-foreground: 40 20% 10%;
+    --secondary: 40 9% 17%;
+    --secondary-foreground: 43 18% 88%;
+    --muted: 40 9% 16.5%;
+    --muted-foreground: 40 8% 58%;
+    --accent: 40 10% 19%;
+    --accent-foreground: 43 18% 90%;
+    --destructive: 8 56% 55%;
+    --border: 40 9% 21%;
+    --input: 40 9% 25%;
+    --ring: 42 46% 55%;
+    --brass-ink: hsl(42 52% 62%);
+    --sidebar: 40 11% 11%;
+    --hairline: hsl(40 9% 20%);
+    --kanban-col: hsl(40 9% 14%);
+  }
+
+  [data-theme="dark"] ::-webkit-scrollbar-thumb { background: hsl(40 8% 25%); border-color: hsl(var(--background)); }
+  [data-theme="dark"] .grain { opacity: 0.05; }
+
+  * { @apply border-border; }
+  html { font-size: 15px; }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Geist", -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+
+  ::selection { background: hsl(var(--brass) / 0.3); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: hsl(43 13% 81%); border-radius: 8px; border: 2px solid hsl(var(--background)); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  svg.lucide { stroke-width: 1.5; }
+}
+
+@layer utilities {
+  .font-mono2 { font-family: "Geist Mono", ui-monospace, "Cascadia Mono", monospace; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80; }
+  .press { transition: transform 0.12s var(--ease-out); }
+  .press:active { transform: scale(0.975); }
+}
+
+/* Зерно: фиксированный слой, не участвует в скролле и событиях */
+.grain {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Каскадное появление контента экрана (одноразовое, лёгкое) */
+.cascade > * { opacity: 0; transform: translateY(7px); animation: rise 0.5s var(--ease-out) forwards; }
+.cascade > *:nth-child(1) { animation-delay: 0.02s; }
+.cascade > *:nth-child(2) { animation-delay: 0.07s; }
+.cascade > *:nth-child(3) { animation-delay: 0.12s; }
+.cascade > *:nth-child(4) { animation-delay: 0.17s; }
+.cascade > *:nth-child(5) { animation-delay: 0.22s; }
+.cascade > *:nth-child(6) { animation-delay: 0.27s; }
+@keyframes rise { to { opacity: 1; transform: none; } }
+
+/* Пульс статуса (перманентная микро-жизнь, не отвлекает) */
+.pulse-dot { position: relative; }
+.pulse-dot::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 999px;
+  border: 1.5px solid hsl(var(--brass) / 0.5); animation: ring 2.6s var(--ease-out) infinite;
+}
+@keyframes ring { 0% { opacity: 0.9; transform: scale(0.55); } 70%, 100% { opacity: 0; transform: scale(1.25); } }
+
+.mark-frame { box-shadow: 0 0 0 1.5px hsl(var(--foreground)); }
