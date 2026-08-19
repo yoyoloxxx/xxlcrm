@@ -1,14 +1,17 @@
 // Подстановка переменных шаблона из связанной записи: {имя} {клиент} {сумма} {стадия} {трек} {менеджер}
 import type { Chat } from "./model";
 import { fmtMoney } from "./model";
-import { getState, recById, recTitle, userName, entityCfg } from "./store";
+import { getState, recById, recTitle, userName, entityCfg, relatedOf } from "./store";
 
 export function fillTemplate(text: string, chat: Chat): string {
   const rec = chat.recordId ? recById(chat.recordId) : undefined;
   const e = rec ? entityCfg(rec.entityId) : undefined;
   // {имя}/{клиент} — это СОБЕСЕДНИК: имя диалога; если диалог связан с разделом «Контакты» — имя контакта.
   // Название сделки сюда не подставляем — «Здравствуйте, Лендинг!» недопустим.
-  const person = ((rec && rec.entityId === "contacts" ? recTitle(rec.id) : "") || chat.name).trim();
+  // имя берём ТОЛЬКО из карточки клиента: «Здравствуйте, Новый!» из названия диалога — это позор перед клиентом
+  const linked = rec && !entityCfg(rec.entityId).stages?.length ? recTitle(rec.id) : "";
+  const related = rec ? relatedOf(rec.id).records.find(r => !entityCfg(r.entityId).stages?.length) : undefined;
+  const person = (linked || (related ? recTitle(related.id) : "")).trim();
   const vars: Record<string, string> = {
     "имя": person.split(/\s+/)[0]?.replace(/[,;:.!?]+$/, "") ?? "",
     "клиент": person,
@@ -22,8 +25,15 @@ export function fillTemplate(text: string, chat: Chat): string {
     const stage = e.stages?.find(s => s.id === rec.stageId);
     if (stage) vars["стадия"] = stage.label;
   }
-  return text.replace(/\{([^}]+)\}/g, (m, key: string) => {
+  const out = text.replace(/\{([^}]+)\}/g, (m, key: string) => {
     const v = vars[key.trim().toLowerCase()];
-    return v !== undefined && v !== "" ? v : m; // неизвестные переменные оставляем видимыми
+    if (v !== undefined && v !== "") return v;
+    if (key.trim().toLowerCase() === "имя") return "";   // клиента не знаем — обращение выкидываем целиком
+    return m;                                            // остальные незаполненные оставляем видимыми: их видно и не отправить
   });
+  // «Здравствуйте, !» → «Здравствуйте!»
+  return out.replace(/,\s*([!?.,])/g, "$1").replace(/[ \t]{2,}/g, " ").trim();
 }
+
+// В тексте остались незаполненные {переменные}? Тогда отправлять нельзя — клиент получит «счёт на {сумма}»
+export const unfilledVars = (text: string): string[] => (text.match(/\{[^}]+\}/g) ?? []);

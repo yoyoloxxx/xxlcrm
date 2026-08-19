@@ -5,9 +5,10 @@ import { relTime, channelName } from "@/lib/model";
 import { useApp, A, recById, recTitle, entityCfg, resolveRoute } from "@/lib/store";
 import { RouteHint } from "./RoutingLive";
 import { sendChatMessage } from "@/lib/integrations";
-import { fillTemplate } from "@/lib/fill";
+import { fillTemplate, unfilledVars } from "@/lib/fill";
 import { Button } from "@/components/ui/button";
-import { ArrowUpRight, MessageSquare, Plug, Send, UserPlus } from "lucide-react";
+import { toast } from "sonner";
+import { ArrowUpRight, ChevronLeft, MessageSquare, Plug, Send, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const CH: Record<Chat["channel"], { label: string; c: string }> = {
@@ -17,6 +18,7 @@ const CH: Record<Chat["channel"], { label: string; c: string }> = {
 
 export function InboxLive({ goSettings }: { goSettings: () => void }) {
   const s = useApp();
+  const [mobileThread, setMobileThread] = useState(false); // телефон: показываем либо список, либо переписку
   const chat = s.chats.find(c => c.id === s.activeChatId) ?? s.chats[0] ?? null;
   // Черновик — свой у каждого диалога: при переключении текст не «переезжает» к другому клиенту
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -38,13 +40,18 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
 
   const send = () => {
     if (!chat || !draft.trim()) return;
+    const holes = unfilledVars(draft);
+    if (holes.length) {                       // иначе клиенту уходит «напоминаем про счёт на {сумма}»
+      toast.error(`Заполните ${holes.join(", ")}`, { description: "Пока в тексте есть переменные в фигурных скобках, отправка заблокирована" });
+      return;
+    }
     sendChatMessage(chat.id, draft.trim());
     setDraft("");
   };
 
   return (
     <div className="flex h-full">
-      <div className="flex w-[290px] shrink-0 flex-col border-r">
+      <div className={cn("flex w-full shrink-0 flex-col border-r md:w-[290px]", mobileThread && "max-md:hidden")}>
         <div className="flex items-center justify-between border-b px-3.5 py-2.5">
           <span className="text-[13.5px] font-semibold">Входящие</span>
           <button onClick={goSettings} className="press inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11.5px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
@@ -71,7 +78,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
             const last = c.msgs[c.msgs.length - 1];
             const ch = CH[c.channel];
             return (
-              <button key={c.id} onClick={() => A.openChat(c.id)}
+              <button key={c.id} onClick={() => { A.openChat(c.id); setMobileThread(true); }}
                 className={cn("press flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left transition-colors duration-150", chat?.id === c.id ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.035]")}>
                 <span className="font-mono2 mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-[9px] font-medium" style={{ background: ch.c + "20", color: ch.c }}>{ch.label}</span>
                 <span className="min-w-0 flex-1">
@@ -97,10 +104,14 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
       </div>
 
       {!chat ? (
-        <div className="grid flex-1 place-items-center text-[13px] text-muted-foreground">Выберите диалог</div>
+        <div className="grid flex-1 place-items-center text-[13px] text-muted-foreground max-md:hidden">Выберите диалог</div>
       ) : (
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className={cn("flex min-w-0 flex-1 flex-col", !mobileThread && "max-md:hidden")}>
           <div className="flex items-center gap-3 border-b px-4 py-2.5">
+            <button onClick={() => setMobileThread(false)} title="К списку диалогов"
+              className="press -ml-1.5 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted md:hidden">
+              <ChevronLeft className="size-4" />
+            </button>
             <div className="min-w-0">
               <div className="truncate text-[13.5px] font-semibold">{chat.name}</div>
               <div className="font-mono2 text-[10.5px] text-muted-foreground">
@@ -123,7 +134,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
                 return (
                   <Button size="sm" className="h-8 gap-1.5 text-[12.5px]" title={entity ? `Упадёт в «${entity.namePlural}»${stage ? ", стадия " + stage.label : ""}` : "Маршрут не настроен"}
                     onClick={() => A.chatCreateLead(chat.id)}>
-                    <UserPlus className="size-3.5" /> Создать {entity ? entity.name.toLowerCase() : "запись"}
+                    <UserPlus className="size-3.5" /> {entity ? "+ " + entity.name : "+ Запись"}
                   </Button>
                 );
               })()}

@@ -4,7 +4,8 @@ import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
 import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, entityCfg as entCfg } from "@/lib/store";
 import { sendChatMessage } from "@/lib/integrations";
-import { fillTemplate } from "@/lib/fill";
+import { toast } from "sonner";
+import { fillTemplate, unfilledVars } from "@/lib/fill";
 import { channelName, FIELD_TYPES } from "@/lib/model";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FieldInput } from "./FieldInput";
@@ -51,13 +52,15 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
         style={{ animation: "rise 0.22s var(--ease-out)" }}>
         <header className="flex items-start gap-2.5 border-b px-4 py-3">
           <div className="min-w-0 flex-1">
+            <label className="eyebrow block">{titleField.label}{titleField.required && <span style={{ color: "var(--brass-ink)" }}> *</span>}</label>
             <input
               value={String(r.values[e.titleFieldId] ?? "")}
               onChange={ev => A.setValue(r.id, titleField, ev.target.value)}
-              placeholder={recTitle(r.id)}
-              className="w-full bg-transparent text-[15px] font-semibold outline-none placeholder:text-muted-foreground/60"
+              placeholder={`${titleField.label}…`}
+              autoFocus={!String(r.values[e.titleFieldId] ?? "")}
+              className="mt-0.5 w-full rounded-md border bg-background px-2 py-1 text-[15px] font-semibold outline-none transition-colors focus:border-ring"
             />
-            <div className="font-mono2 mt-0.5 text-[10.5px] text-muted-foreground">{e.name} №{r.num} · создана {relTime(r.createdAt)}</div>
+            <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">{e.name} №{r.num} · создана {relTime(r.createdAt)}</div>
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -262,7 +265,13 @@ function ChatBlock({ recId }: { recId: string }) {
   const [draft, setDraft] = useState("");
   if (!chat) return null;
   const msgs = chat.msgs.slice(-6);
-  const send = () => { if (!draft.trim()) return; sendChatMessage(chat.id, draft.trim()); setDraft(""); };
+  const send = () => {
+    if (!draft.trim()) return;
+    const holes = unfilledVars(draft);
+    if (holes.length) { toast.error(`Заполните ${holes.join(", ")}`, { description: "В тексте остались переменные — клиент получит их как есть" }); return; }
+    sendChatMessage(chat.id, draft.trim());
+    setDraft("");
+  };
   return (
     <section className="border-t px-4 py-3.5">
       <div className="mb-2 flex items-center gap-2">

@@ -111,7 +111,31 @@ export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (
         </p>
       )}
 
-      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg border bg-border">
+      {/* Телефон: 7 колонок в 390px превращают названия в «До…», поэтому там — список по дням */}
+      <div className="flex flex-col gap-1.5 md:hidden">
+        {cells.filter(d => d.getMonth() === cur.getMonth() && (events.get(key(d)) ?? []).length).map(d => (
+          <div key={key(d)} className="rounded-md border bg-card p-2">
+            <div className="mb-1 flex items-baseline gap-2">
+              <span className={cn("font-mono2 text-[12px]", key(d) === today && "font-bold")} style={key(d) === today ? { color: "var(--brass-ink)" } : undefined}>
+                {d.getDate()} {MONTHS[d.getMonth()].slice(0, 3)}
+              </span>
+              {key(d) === today && <span className="text-[10.5px] text-muted-foreground">сегодня</span>}
+            </div>
+            <div className="flex flex-col gap-1">
+              {(events.get(key(d)) ?? []).map(e => (
+                <button key={e.id} onClick={e.run}
+                  className="press truncate rounded border px-2 py-1 text-left text-[12px]"
+                  style={{ background: e.color + "1c", borderColor: e.color + "55" }}>
+                  {e.label}{e.hint ? ` · ${e.hint}` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        {total === 0 && <p className="rounded-md border border-dashed p-3 text-center text-[12px] text-muted-foreground">В этом месяце событий нет</p>}
+      </div>
+
+      <div className="hidden grid-cols-7 gap-px overflow-hidden rounded-lg border bg-border md:grid">
         {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map(w => (
           <div key={w} className="bg-background px-2 py-1.5 text-center text-[10.5px] font-medium text-muted-foreground">{w}</div>
         ))}

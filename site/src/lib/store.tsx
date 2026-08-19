@@ -140,12 +140,17 @@ function mut(fn: (s: State) => void) { fn(st); emit(); }
 // ---------- undo (снимки перед опасными действиями) ----------
 const history: string[] = [];
 function pushHistory() {
-  history.push(JSON.stringify({ entities: st.entities, records: st.records, tasks: st.tasks, activities: st.activities }));
+  // в снапшот идут и маршруты с правилами: иначе откат удаления раздела возвращает записи,
+  // но заявки продолжают литься в чужой раздел, а выключенные правила остаются выключенными
+  history.push(JSON.stringify({
+    entities: st.entities, records: st.records, tasks: st.tasks, activities: st.activities,
+    automations: st.automations, routes: st.routes, chats: st.chats,
+  }));
   if (history.length > 25) history.shift();
 }
 export function undo(): boolean {
   const snap = history.pop();
-  if (!snap) return false;
+  if (!snap) { toast("Отменять нечего", { description: "История пуста — с открытия ничего не удаляли и не перестраивали" }); return false; }
   mut(s => {
     Object.assign(s, JSON.parse(snap));
     if (s.drawerRecordId && !s.records.some(r => r.id === s.drawerRecordId)) s.drawerRecordId = null;
@@ -278,7 +283,29 @@ function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?
 
 // ---------- экшены ----------
 export const A = {
-  openRecord(id: string | null) { mut(s => { s.drawerRecordId = id; }); },
+  openRecord(id: string | null) {
+    const prev = st.drawerRecordId;
+    mut(s => { s.drawerRecordId = id; });
+    // закрыли только что созданную и совсем пустую карточку — не оставляем «Сделку №9» без единого поля
+    if (prev && prev !== id) {
+      const r = recById(prev);
+      const fresh = r && now() - r.createdAt < 10 * 60 * 1000;
+      const empty = r && Object.values(r.values).every(v => v === undefined || v === null || v === "");
+      // задачи, которые поставило правило автоматики, не считаются «человек с карточкой работал»
+      const untouched = r && !st.tasks.some(t => t.recordId === r.id && !t.id.startsWith("t_rule_"))
+        // след человека — это комментарий, правка поля или смена стадии; «создана» и авто-задача не в счёт
+        && !st.activities.some(a => a.recordId === r.id && (a.kind === "comment" || a.kind === "field" || a.kind === "stage"))
+        && !st.chats.some(c => c.recordId === r.id);
+      if (r && fresh && empty && untouched) {
+        mut(s => {
+          s.records = s.records.filter(x => x.id !== r.id);
+          s.activities = s.activities.filter(a => a.recordId !== r.id);
+          s.tasks = s.tasks.filter(t => t.recordId !== r.id);   // и задачу-автомат за компанию
+        });
+        toast("Пустая карточка не сохранена", { description: `${entityCfg(r.entityId).name} без названия — убрал, чтобы не мусорить в воронке` });
+      }
+    }
+  },
   setUser(id: string) { mut(s => { s.currentUserId = id; }); },
 
   setValue(recId: string, f: Field, value: unknown) {
@@ -685,7 +712,7 @@ export const A = {
     mut(s => {
       const cc = s.chats.find(x => x.id === chatId)!;
       cc.recordId = id;
-      pushAct(id, "comment", `${e.name} создан(а) из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}${person ? ` · клиент: ${recTitle(person.id)}` : ""}`);
+      pushAct(id, "comment", `Создано из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}${person ? ` · клиент: ${recTitle(person.id)}` : ""}`);
     });
     toast.success(`${e.name} → ${stage?.label ?? e.namePlural}`, {
       description: person ? `Клиент: ${recTitle(person.id)}${ownerId ? " · " + userName(ownerId) : ""}` : `Из ${channelName(c.channel)}${ownerId ? " · " + userName(ownerId) : ""}`,
@@ -739,6 +766,7 @@ export const A = {
     return id;
   },
   entPatch(id: string, patch: Partial<Pick<EntityCfg, "name" | "namePlural" | "icon">>) {
+    if (patch.name || patch.namePlural) pushHistory();
     mut(s => { const e = s.entities.find(x => x.id === id); if (e) Object.assign(e, patch); });
   },
   // применить пресет ниши: разделы + воронка + автоматизации + демо-данные одним нажатием.
@@ -805,19 +833,30 @@ export const A = {
     return true;
   },
   fieldAdd(entityId: string, f: Omit<Field, "id">): string {
+    pushHistory();
     const id = uid("f");
     mut(s => { s.entities.find(e => e.id === entityId)?.fields.push({ ...f, id }); });
     return id;
   },
   fieldUpdate(entityId: string, fieldId: string, patch: Partial<Field>) {
+    if (patch.type) pushHistory();          // смена типа может обесценить значения — даём откат
     mut(s => { const f = s.entities.find(e => e.id === entityId)?.fields.find(x => x.id === fieldId); if (f) Object.assign(f, patch); });
+  },
+  // сколько записей потеряют значение, если удалить поле — спрашиваем ДО удаления в интерфейсе
+  fieldUsage(entityId: string, fieldId: string): number {
+    return st.records.filter(r => r.entityId === entityId && r.values[fieldId] !== undefined && r.values[fieldId] !== "").length;
   },
   fieldDelete(entityId: string, fieldId: string) {
     const e = st.entities.find(x => x.id === entityId);
     if (!e || e.titleFieldId === fieldId) { toast.error("Поле-заголовок удалить нельзя"); return; }
+    const label = e.fields.find(f => f.id === fieldId)?.label ?? "поле";
+    const used = A.fieldUsage(entityId, fieldId);
+    pushHistory();
     mut(s => { const en = s.entities.find(x => x.id === entityId)!; en.fields = en.fields.filter(f => f.id !== fieldId); });
+    toast(`Поле «${label}» удалено`, { description: used ? `Значения у ${used} ${plural(used, "записи", "записей", "записей")} потеряны — Ctrl+Z вернёт` : "Ctrl+Z вернёт" });
   },
   fieldMove(entityId: string, fieldId: string, dir: -1 | 1) {
+    pushHistory();
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       const i = e.fields.findIndex(f => f.id === fieldId); const j = i + dir;
@@ -826,6 +865,7 @@ export const A = {
     });
   },
   stageAdd(entityId: string, label: string) {
+    pushHistory();
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       if (!e.stages) e.stages = [];
@@ -835,18 +875,33 @@ export const A = {
   stageUpdate(entityId: string, stageId: string, patch: Partial<Stage>) {
     mut(s => { const stg = s.entities.find(x => x.id === entityId)?.stages?.find(x => x.id === stageId); if (stg) Object.assign(stg, patch); });
   },
+  stageCount(entityId: string, stageId: string): number {
+    return st.records.filter(r => r.entityId === entityId && r.stageId === stageId).length;
+  },
   stageDelete(entityId: string, stageId: string) {
     const e = st.entities.find(x => x.id === entityId);
     if (!e?.stages || e.stages.length <= 1) { toast.error("Должна остаться хотя бы одна стадия"); return; }
+    const label = e.stages.find(x => x.id === stageId)?.label ?? "стадия";
+    let moved = 0;
+    pushHistory();
     mut(s => {
       const en = s.entities.find(x => x.id === entityId)!;
       en.stages = en.stages!.filter(x => x.id !== stageId);
       const first = en.stages[0];
-      s.records.forEach(r => { if (r.entityId === entityId && r.stageId === stageId) { r.stageId = first.id; r.stageAt = now(); } });
+      s.records.forEach(r => {
+        if (r.entityId === entityId && r.stageId === stageId) {
+          r.stageId = first.id; r.stageAt = now(); moved++;
+          pushAct(r.id, "stage", `Стадия: ${first.label} (стадия «${label}» удалена)`, s.currentUserId);
+        }
+      });
       repairAndTell(s); // маршруты и правила, смотревшие на эту стадию, чиним сразу
+    });
+    toast(`Стадия «${label}» удалена`, {
+      description: moved ? `${moved} ${plural(moved, "запись перенесена", "записи перенесены", "записей перенесено")} в первую стадию — Ctrl+Z вернёт` : "Ctrl+Z вернёт",
     });
   },
   stageMove(entityId: string, stageId: string, dir: -1 | 1) {
+    pushHistory();
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e?.stages) return;
       const i = e.stages.findIndex(x => x.id === stageId); const j = i + dir;

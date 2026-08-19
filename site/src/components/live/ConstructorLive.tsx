@@ -98,7 +98,7 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                       <div className="flex shrink-0">
                         <button disabled={i === 0} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, -1)}><ArrowUp className="size-3.5" /></button>
                         <button disabled={i === e.stages!.length - 1} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, 1)}><ArrowDown className="size-3.5" /></button>
-                        <button className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => A.stageDelete(e.id, stg.id)}><Trash2 className="size-3.5" /></button>
+                        <DeleteStage entityId={e.id} stageId={stg.id} />
                       </div>
                     </div>
                   ))}
@@ -164,6 +164,50 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
   );
 }
 
+// Удаление стадии — говорим, сколько записей переедет в первую стадию
+function DeleteStage({ entityId, stageId }: { entityId: string; stageId: string }) {
+  const [armed, setArmed] = useState(false);
+  const n = A.stageCount(entityId, stageId);
+  if (!armed) {
+    return (
+      <button title={n ? `Удалить стадию — ${n} записей переедет в первую` : "Удалить стадию"}
+        className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => setArmed(true)}>
+        <Trash2 className="size-3.5" />
+      </button>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <span className="text-[10.5px] text-destructive">{n ? `${n} → в первую` : "точно?"}</span>
+      <button onClick={() => { A.stageDelete(entityId, stageId); setArmed(false); }}
+        className="press rounded border border-destructive/40 px-1.5 py-0.5 text-[10.5px] text-destructive hover:bg-destructive/5">да</button>
+      <button onClick={() => setArmed(false)} className="press rounded border px-1.5 py-0.5 text-[10.5px] text-muted-foreground">нет</button>
+    </span>
+  );
+}
+
+// Удаление поля — двухшаговое: сначала честно говорим, сколько записей потеряют значение
+function DeleteField({ entityId, f }: { entityId: string; f: Field }) {
+  const [armed, setArmed] = useState(false);
+  const used = A.fieldUsage(entityId, f.id);
+  if (!armed) {
+    return (
+      <button title={used ? `Удалить поле — значения у ${used} записей будут потеряны` : "Удалить поле"}
+        className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => setArmed(true)}>
+        <Trash2 className="size-3.5" />
+      </button>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <span className="text-[10.5px] text-destructive">{used ? `потеряем ${used}` : "точно?"}</span>
+      <button onClick={() => { A.fieldDelete(entityId, f.id); setArmed(false); }}
+        className="press rounded border border-destructive/40 px-1.5 py-0.5 text-[10.5px] text-destructive hover:bg-destructive/5">да</button>
+      <button onClick={() => setArmed(false)} className="press rounded border px-1.5 py-0.5 text-[10.5px] text-muted-foreground">нет</button>
+    </span>
+  );
+}
+
 function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: Field; isTitle: boolean; first: boolean; last: boolean }) {
   const typeLabel = FIELD_TYPES.find(t => t.type === f.type)?.label ?? f.type;
   const relName = f.type === "relation" ? allEntities().find(e => e.id === f.relationTo)?.namePlural : null;
@@ -171,7 +215,18 @@ function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: 
     <div className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5">
       <Input value={f.label} onChange={ev => A.fieldUpdate(entityId, f.id, { label: ev.target.value })}
         className="h-8 flex-1 border-transparent bg-transparent px-1.5 text-[13px] font-medium focus-visible:border-input" />
-      <span className="w-[112px] shrink-0 truncate text-[11px] text-muted-foreground">{typeLabel}{relName ? ` → ${relName}` : ""}</span>
+      {f.type === "relation" ? (
+        <span className="w-[126px] shrink-0 truncate text-[11px] text-muted-foreground">{typeLabel}{relName ? ` → ${relName}` : ""}</span>
+      ) : (
+        <Select value={f.type} onValueChange={v => A.fieldUpdate(entityId, f.id, { type: v as Field["type"] })}>
+          <SelectTrigger className="h-8 w-[126px] shrink-0 border-transparent text-[11.5px] hover:border-input" title="Тип поля — можно поменять">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FIELD_TYPES.filter(t => t.type !== "relation").map(t => <SelectItem key={t.type} value={t.type}>{t.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      )}
       {f.type === "select" && <OptionsEditor entityId={entityId} f={f} />}
       <button
         title={f.inTable === false ? "Показать колонку в таблице" : "Скрыть колонку из таблицы"}
@@ -186,7 +241,7 @@ function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: 
         <div className="flex shrink-0">
           <button disabled={first} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, -1)}><ArrowUp className="size-3.5" /></button>
           <button disabled={last} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, 1)}><ArrowDown className="size-3.5" /></button>
-          <button className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => A.fieldDelete(entityId, f.id)}><Trash2 className="size-3.5" /></button>
+          <DeleteField entityId={entityId} f={f} />
         </div>
       )}
     </div>

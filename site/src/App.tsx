@@ -88,7 +88,17 @@ export default function App() {
   const [page, setPage] = useState<Page>("myday"); // утро начинается с «что у меня сегодня», а не с воронки
   const [newEnt, setNewEnt] = useState(false);
   const [palette, setPalette] = useState(false); // Ctrl+K — общий поиск по всему пространству
-  const [sidebar, setSidebar] = useState(true);  // сворачивание — чтобы на ноутбуке таблице доставалась вся ширина
+  const [sidebar, setSidebar] = useState(() => {   // на телефоне панель закрыта, на десктопе — как оставили
+    try {
+      const saved = localStorage.getItem("xxl-sidebar");
+      if (saved !== null) return saved === "1";
+      return window.matchMedia("(min-width: 768px)").matches;
+    } catch { return true; }
+  });
+  const isPhone = () => { try { return window.matchMedia("(max-width: 767px)").matches; } catch { return false; } };
+  useEffect(() => { try { localStorage.setItem("xxl-sidebar", sidebar ? "1" : "0"); } catch { /* нет хранилища */ } }, [sidebar]);
+  // переход по навигации на телефоне закрывает панель — иначе она закрывает собой весь экран
+  const go = (pg: Page) => { setPage(pg); if (isPhone()) setSidebar(false); };
   const [presets, setPresets] = useState(false); // выбор пресета ниши
   const [presetsOnboarding, setPresetsOnboarding] = useState(false); // пикер открылся сам на пустом пространстве
   const openPresets = () => { setPresetsOnboarding(false); setPresets(true); };
@@ -144,11 +154,20 @@ export default function App() {
       <div className="grain" />
 
       {/* ─── Сайдбар ─── */}
-      <aside className={cn("flex shrink-0 flex-col overflow-hidden border-r transition-[width] duration-200", sidebar ? "w-[232px]" : "w-0 border-r-0")} style={{ background: "hsl(var(--sidebar))" }}>
+      {/* Телефон: панель выезжает поверх содержимого, фон затемняется и закрывает её по тапу */}
+      {sidebar && (
+        <button aria-label="Закрыть панель" onClick={() => setSidebar(false)}
+          className="fixed inset-0 z-40 bg-foreground/25 md:hidden" />
+      )}
+      <aside className={cn(
+        "flex flex-col overflow-hidden border-r transition-all duration-200 md:shrink-0",
+        "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-[264px] max-md:shadow-[10px_0_40px_-16px_rgba(0,0,0,.5)]",
+        sidebar ? "md:w-[232px] max-md:translate-x-0" : "md:w-0 md:border-r-0 max-md:-translate-x-full",
+      )} style={{ background: "hsl(var(--sidebar))" }}>
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.16</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.17</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -177,7 +196,7 @@ export default function App() {
 
         <nav className="flex flex-col gap-px px-3">
           {NAV.map(n => (
-            <button key={n.id} onClick={() => setPage(n.id)}
+            <button key={n.id} onClick={() => go(n.id)}
               className={cn("press flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors duration-150",
                 page === n.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
               <n.icon className="size-4" />
@@ -194,7 +213,7 @@ export default function App() {
         </div>
         <nav className="mt-1 flex flex-col gap-px overflow-y-auto px-3">
           {s.entities.map(sec => (
-            <button key={sec.id} onClick={() => setPage("ent:" + sec.id)}
+            <button key={sec.id} onClick={() => go("ent:" + sec.id)}
               className={cn("press flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors duration-150",
                 page === "ent:" + sec.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
               <EntIcon name={sec.icon} className="size-4" />
@@ -213,7 +232,7 @@ export default function App() {
         </nav>
 
         <div className="mt-auto border-t px-3 py-2.5">
-          <button onClick={() => setPage("settings")}
+          <button onClick={() => go("settings")}
             className={cn("press flex w-full items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] transition-colors duration-150",
               page === "settings" ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
             <Settings className="size-4" /> Настройки
@@ -232,7 +251,7 @@ export default function App() {
             className="press relative ml-1 flex h-8 w-full max-w-sm items-center overflow-hidden whitespace-nowrap rounded-md bg-muted/70 pl-8 pr-14 text-left text-[12.5px] text-muted-foreground/90 transition-colors hover:bg-muted">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <span className="truncate">Поиск: записи, диалоги, задачи…</span>
-            <kbd className="font-mono2 absolute right-2 top-1/2 -translate-y-1/2 rounded border bg-card px-1 text-[10px] text-muted-foreground">Ctrl K</kbd>
+            <kbd className="font-mono2 absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-card px-1 text-[10px] text-muted-foreground sm:block">Ctrl K</kbd>
           </button>
           <div className="flex-1" />
           <button onClick={() => setPage("settings")} className="press mr-1 hidden items-center gap-1.5 rounded-md px-1.5 py-1 sm:flex"
@@ -254,14 +273,14 @@ export default function App() {
           ); })() : <Idle className="h-8 border-0 px-1"><Avatar n="Г" hue={42} size={26} /></Idle>}
         </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto max-md:pb-[56px]">
           {page === "myday" && <MyDayLive goTasks={() => setPage("tasks")} goInbox={() => setPage("inbox")}
             goSettings={() => setPage("settings")} onPresets={openPresets} goEntity={() => setPage("ent:" + (s.entities[0]?.id ?? "deals"))} />}
           {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
           {page === "routing" && (
-            <div className="cascade mx-auto max-w-2xl px-5 py-6">
+            <div className="cascade mx-auto max-w-2xl px-3 py-6 md:px-5">
               <ScreenHead title="Приём заявок" sub="Что система делает сама с каждым входящим сообщением и заявкой с сайта" />
               <div className="mt-5 rounded-lg border bg-card"><RoutingLive goSettings={() => setPage("settings")} /></div>
             </div>
@@ -270,8 +289,25 @@ export default function App() {
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
-        <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.16 · фильтры по любым полям и свои сегменты, массовые действия, выгрузка в CSV, сводка внутри раздела, поле на лету</span>
+        {/* Телефон: постоянная нижняя навигация — иначе, свернув панель, человек теряет способ переходить */}
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[56px] border-t bg-card md:hidden">
+          {([
+            ["myday", "Сегодня", SunMedium],
+            ["inbox", "Входящие", InboxIcon],
+            ["tasks", "Задачи", ListChecks],
+            [entId ? "ent:" + entId : (s.entities[0] ? "ent:" + s.entities[0].id : "myday"), "Разделы", Package],
+          ] as [string, string, React.ElementType][]).map(([id, label, Ic]) => (
+            <button key={label} onClick={() => { if (label === "Разделы" && !isPhone()) return; if (label === "Разделы") { setPage(id); setSidebar(true); } else go(id); }}
+              className={cn("flex flex-1 flex-col items-center justify-center gap-0.5 text-[10.5px]",
+                page === id ? "font-medium" : "text-muted-foreground")}
+              style={page === id ? { color: "var(--brass-ink)" } : undefined}>
+              <Ic className="size-[18px]" /> {label}
+            </button>
+          ))}
+        </nav>
+
+        <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.17 · телефон, откат структурных правок, подтверждения удалений, честные шаблоны и демо-данные</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -298,7 +334,7 @@ function ScreenHead({ title, sub, children }: { title: string; sub?: string; chi
         <h1 className="text-[21px] font-semibold tracking-tight">{title}</h1>
         {sub && <p className="mt-0.5 text-[12.5px] text-muted-foreground">{sub}</p>}
       </div>
-      {children && <div className="flex items-center gap-1.5">{children}</div>}
+      {children && <div className="flex flex-wrap items-center gap-1.5">{children}</div>}
     </div>
   );
 }
@@ -346,13 +382,18 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   useEffect(() => { setViewState(id, { view: activeView, q, mine, seg, conds, saved: segs }); }, [id, activeView, q, mine, seg, conds, segs]);
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b px-5 pt-4">
+      <div className="border-b px-3 pt-4 md:px-5">
         <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} записей`} · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
           <button onClick={openSetup}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
           </button>
-          <button onClick={() => downloadCSV(e.namePlural, toCSV(e, filterOn ? recordsOf(id).filter(pred) : recordsOf(id), dispCtx()))}
+          <button onClick={() => {
+              const rows = filterOn ? recordsOf(id).filter(pred) : recordsOf(id);
+              if (!rows.length) { toast.error("Выгружать нечего", { description: "Под текущим фильтром нет записей — сбросьте фильтр" }); return; }
+              downloadCSV(e.namePlural, toCSV(e, rows, dispCtx()));
+              toast.success(`Выгружено: ${rows.length} ${plural(rows.length, "запись", "записи", "записей")}`);
+            }}
             title="Выгрузить в CSV то, что сейчас на экране — открывается в Excel"
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <Download className="size-3" /> Выгрузить
@@ -366,8 +407,8 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
             <Plus className="size-3.5" /> {e.name}
           </button>
         </ScreenHead>
-        <div className="mt-1 flex items-center justify-between">
-          <div className="flex items-center gap-0.5">
+        <div className="mt-1 flex items-center justify-between gap-2 max-md:flex-col max-md:items-stretch">
+          <div className="flex items-center gap-0.5 overflow-x-auto">
             {tabs.map(([tid, label, Ic]) => (
               <button key={tid} onClick={() => setView(tid)}
                 className={cn("press relative flex items-center gap-1.5 px-2.5 py-2 text-[12.5px] transition-colors duration-150", activeView === tid ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
@@ -376,7 +417,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1.5 pb-1.5">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
               <input value={q} onChange={ev => setQ(ev.target.value)} placeholder="Поиск в разделе…"
@@ -580,6 +621,33 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
   );
 }
 
+// Демо-данные: пока в базе примеры, человек должен знать, что это не его бизнес
+function DemoNotice() {
+  const s = useApp();
+  const [armed, setArmed] = useState(false);
+  if (s.mode === "cloud") return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-dashed px-3 py-2">
+      <span className="text-[11.5px] leading-snug text-muted-foreground">
+        В базе примеры — чужие сделки и клиенты. Загрузите свои через «Загрузить» в разделе или начните с чистого листа.
+      </span>
+      {armed ? (
+        <span className="ml-auto flex items-center gap-1.5">
+          <span className="text-[11px] text-destructive">удалить все примеры?</span>
+          <button onClick={() => { A.resetDemo(); setArmed(false); }}
+            className="press rounded border border-destructive/40 px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/5">да</button>
+          <button onClick={() => setArmed(false)} className="press rounded border px-2 py-0.5 text-[11px] text-muted-foreground">нет</button>
+        </span>
+      ) : (
+        <button onClick={() => setArmed(true)}
+          className="press ml-auto shrink-0 rounded-md border px-2 py-1 text-[11.5px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
+          Очистить примеры
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Название пространства: в облаке переименовывает команду, локально — просто подпись
 function WorkspaceName() {
   const s = useApp();
@@ -597,11 +665,12 @@ function WorkspaceName() {
 
 function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
   return (
-    <div className="cascade mx-auto max-w-2xl px-5 py-6">
+    <div className="cascade mx-auto max-w-2xl px-3 py-6 md:px-5">
       <ScreenHead title="Настройки" />
       <div className="mt-5 divide-y rounded-lg border bg-card">
         <div className="px-4 py-3.5">
           <div className="text-[13px] font-semibold">Пространство</div>
+          <DemoNotice />
           <label className="eyebrow mt-3 block">Название компании</label>
           <WorkspaceName />
           <label className="eyebrow mt-3.5 block">Тема</label>

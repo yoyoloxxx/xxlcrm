@@ -40,7 +40,7 @@ await boxes.first().click(); await p.waitForTimeout(400);
 ok("Массовое выделение работает", /Выбрано/.test(await p.locator("main").innerText()));
 const [dl] = await Promise.all([
   p.waitForEvent("download", { timeout: 15000 }).catch(() => null),
-  p.getByRole("button", { name: "Выгрузить" }).click(),
+  p.getByRole("button", { name: "Выгрузить", exact: true }).click(),
 ]);
 let csvHead = "";
 if (dl) { const fp = await dl.path(); if (fp) csvHead = (await import("node:fs")).readFileSync(fp, "utf8").split("\n")[0]; }

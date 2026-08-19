@@ -37,7 +37,7 @@ await page.waitForTimeout(400);
 ok("Во Входящих есть подсказка маршрута", await page.getByText(/новые →/).first().isVisible());
 await page.getByRole("button", { name: /Новый клиент \(демо\)/ }).click();
 await page.waitForTimeout(300);
-const createBtn = page.getByRole("button", { name: /Создать сделк/i });
+const createBtn = page.getByRole("button", { name: "+ Сделка", exact: true });
 ok("Кнопка называет раздел маршрута", await createBtn.isVisible());
 await createBtn.click();
 await page.waitForTimeout(600);
@@ -126,7 +126,9 @@ const qualRow = page.locator("div").filter({ hasText: /^Квалификация
 await qualRow.scrollIntoViewIfNeeded().catch(() => {});
 const delBtns = page.locator("[role=dialog] button:has(svg.lucide-trash2)");
 await delBtns.nth(1).click(); // вторая стадия — Квалификация
-await page.waitForTimeout(600);
+await page.waitForTimeout(400);
+await page.locator("[role=dialog] button", { hasText: /^да$/ }).first().click();   // удаление теперь спрашивает подтверждение
+await page.waitForTimeout(700);
 const toasts = await page.locator("[data-sonner-toast]").allInnerTexts();
 ok("Сказал, что подстроил настройки", toasts.some(t => /подстроен/i.test(t)), toasts.join(" | ").slice(0, 160));
 await page.keyboard.press("Escape");

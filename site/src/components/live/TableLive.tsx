@@ -12,7 +12,8 @@ import { FIELD_TYPES } from "@/lib/model";
 import { FieldInput } from "./FieldInput";
 import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ArrowDown, ArrowUp, ListChecks, Maximize2, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, ListChecks, Maximize2, Plus, Trash2, X } from "lucide-react";
+import { toCSV, downloadCSV } from "@/lib/export";
 import { cn } from "@/lib/utils";
 
 export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (r: import("@/lib/model").Rec) => boolean }) {
@@ -78,6 +79,10 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
             <ListChecks className="size-3.5" /> Поставить
           </Button>
         </div>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]"
+          onClick={() => downloadCSV(e.namePlural + "_выбранное", toCSV(e, sorted.filter(r => sel.has(r.id)), dispCtx()))}>
+          <Download className="size-3.5" /> Выгрузить выбранные
+        </Button>
         <Button variant="outline" size="sm" className="h-8 gap-1.5 border-destructive/40 text-[12px] text-destructive hover:bg-destructive/5"
           onClick={() => { A.bulkDelete(ids); setSel(new Set()); }}>
           <Trash2 className="size-3.5" /> Удалить
@@ -120,7 +125,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
               </PopoverContent>
             </Popover>
           </th>
-          <th className="w-full border-b bg-background" />
+          <th className="border-b bg-background" />
         </tr>
       </thead>
       <tbody>

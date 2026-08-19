@@ -5,6 +5,8 @@
 import type { Rec, Rule } from "./model";
 import { DAY } from "./model";
 import { getState, recById, ruleHooks, A } from "./store";
+import { toast } from "sonner";
+import { plural } from "./model";
 
 const rules = () => getState().automations.filter(r => r.enabled);
 
@@ -49,9 +51,10 @@ function lastActivityTs(recId: string): number {
   return last;
 }
 
-export function scanAutomations() {
+export function scanAutomations(announce = false) {
   const st = getState();
   const nowMs = Date.now();
+  const before = st.tasks.length;
   for (const r of rules()) {
     if (r.trigger.type === "stage_stuck") {
       const { entityId, days } = r.trigger;
@@ -77,6 +80,13 @@ export function scanAutomations() {
       }
     }
   }
+  // цифры на «Моём дне» не должны меняться сами по себе: если правила что-то создали — говорим об этом
+  const added = getState().tasks.length - before;
+  if (announce && added > 0) {
+    toast(`Автоматизации поставили ${added} ${plural(added, "задачу", "задачи", "задач")}`, {
+      description: "Правила «когда → тогда» проверили записи — список задач обновлён",
+    });
+  }
 }
 
 let started = false;
@@ -85,6 +95,6 @@ export function initAutomations() {
   started = true;
   ruleHooks.created = onCreated;
   ruleHooks.stage = onStage;
-  window.setTimeout(scanAutomations, 2500);       // после первичной загрузки данных
+  window.setTimeout(() => scanAutomations(true), 2500); // после первичной загрузки данных — с отчётом
   window.setInterval(scanAutomations, 3600000);   // и раз в час
 }

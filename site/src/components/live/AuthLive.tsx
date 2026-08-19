@@ -1,5 +1,5 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp, setAuthStage } from "@/lib/store";
 import { signIn, signUp, signOutCloud, createWs, joinWs } from "@/lib/cloud";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,12 @@ function Ava({ name, hue, size = 26 }: { name: string; hue: number; size?: numbe
 }
 
 export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
+  // Escape закрывает окно входа: без этого выйти можно только через безымянный крестик 26×26
+  useEffect(() => {
+    const h = (ev: KeyboardEvent) => { if (ev.key === "Escape") setAuthStage(null); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
   const [tab, setTab] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
@@ -35,7 +41,9 @@ export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" style={{ background: "hsl(var(--foreground) / 0.45)" }}>
+    <div role="dialog" aria-modal="true" aria-label="Вход в аккаунт"
+      onMouseDown={ev => { if (ev.target === ev.currentTarget) setAuthStage(null); }}
+      className="fixed inset-0 z-50 grid place-items-center p-4" style={{ background: "hsl(var(--foreground) / 0.45)" }}>
       <div className="cascade w-full max-w-md rounded-xl border bg-card p-6 shadow-xl">
         <div className="flex items-center gap-2.5">
           <span className="mark-frame grid h-[30px] w-[30px] place-items-center rounded-[7px] text-[10px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
