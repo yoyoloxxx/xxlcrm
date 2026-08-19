@@ -1,11 +1,13 @@
 // Живой «Мой день»: приветствие, реальные цифры, задачи на сегодня, записи без следующего шага, дни рождения
 import type { Task } from "@/lib/model";
 import { DAY } from "@/lib/model";
-import { useApp, A, recById, recTitle, entityCfg, userName } from "@/lib/store";
+import { useState } from "react";
+import { useApp, A, recById, recTitle, entityCfg, userName, setAuthStage } from "@/lib/store";
+import { setupMarks, markSetup } from "@/lib/setup";
 import { upcomingBirthdays, inDaysLabel } from "@/lib/bday";
 import { congratulate } from "./TasksLive";
 import { Button } from "@/components/ui/button";
-import { Cake, CalendarClock, ListChecks, MessageSquare, Phone, Plus } from "lucide-react";
+import { Cake, CalendarClock, Check, ListChecks, MessageSquare, Phone, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const KIND_ICON: Record<Task["kind"], React.ElementType> = { call: Phone, meet: CalendarClock, todo: ListChecks, msg: MessageSquare };
@@ -16,7 +18,47 @@ const StagePillLike = ({ label, color }: { label: string; color: string }) => (
 );
 const sod = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
-export function MyDayLive({ goTasks, goInbox }: { goTasks: () => void; goInbox: () => void }) {
+// Первый вход: четыре шага до работающей CRM. Исчезает, когда всё сделано или человек скрыл.
+function SetupChecklist({ goSettings, onPresets, goEntity }: { goSettings: () => void; onPresets: () => void; goEntity: () => void }) {
+  const s = useApp();
+  const [hidden, setHidden] = useState(!!setupMarks().hidden);
+  const i = s.integrations;
+  const steps = [
+    { id: "structure", label: "Настроить разделы под ваш бизнес", hint: "готовый шаблон ниши или свой раздел", done: !!setupMarks().structure, run: onPresets },
+    { id: "channel", label: "Подключить канал", hint: "Telegram, WhatsApp, MAX или форма с сайта", done: i.tg.status === "ok" || i.tgUser.status === "ok" || i.wa.status === "ok" || i.max.status === "ok" || i.tilda.status === "ok", run: goSettings },
+    { id: "data", label: "Загрузить своих клиентов", hint: "CSV из Excel или другой CRM — кнопка «Загрузить» в разделе", done: !!setupMarks().imported, run: goEntity },
+    { id: "cloud", label: "Общее пространство", hint: "чтобы данные были на всех устройствах и у команды", done: s.mode === "cloud", run: () => setAuthStage("auth") },
+  ];
+  const left = steps.filter(x => !x.done).length;
+  if (hidden || !left) return null;
+  return (
+    <div className="mt-4 rounded-lg border bg-card p-3.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] font-semibold">Настройка: осталось {left} из {steps.length}</span>
+        <button onClick={() => { markSetup("hidden"); setHidden(true); }} title="Скрыть — можно жить и так"
+          className="press ml-auto rounded p-1 text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+      </div>
+      <div className="mt-2 flex flex-col gap-1">
+        {steps.map(st => (
+          <button key={st.id} onClick={st.done ? undefined : st.run} disabled={st.done}
+            className={cn("flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-colors",
+              st.done ? "border-transparent bg-muted/40" : "press hover:border-foreground/25")}>
+            <span className="grid size-4 shrink-0 place-items-center rounded-full border"
+              style={st.done ? { background: "#6E8B4F", borderColor: "#6E8B4F" } : undefined}>
+              {st.done && <Check className="size-2.5 text-white" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className={cn("block text-[12.5px]", st.done ? "text-muted-foreground line-through" : "font-medium")}>{st.label}</span>
+              {!st.done && <span className="block text-[11px] text-muted-foreground">{st.hint}</span>}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }: { goTasks: () => void; goInbox: () => void; goSettings: () => void; onPresets: () => void; goEntity: () => void }) {
   const s = useApp();
   const start = sod();
 
@@ -50,6 +92,8 @@ export function MyDayLive({ goTasks, goInbox }: { goTasks: () => void; goInbox: 
           {dateStr} — {data.todayTasks.length ? `задач на сегодня: ${data.todayTasks.length}` : "на сегодня задач нет"}{data.noNext.length ? `, без следующего шага: ${data.noNext.length}` : ""}
         </p>
       </div>
+
+      <SetupChecklist goSettings={goSettings} onPresets={onPresets} goEntity={goEntity} />
 
       <div className="mt-4 flex flex-wrap gap-2">
         {([

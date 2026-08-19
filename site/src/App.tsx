@@ -1,9 +1,9 @@
-// XXLcrm — обёртка приложения (стиль yoyoloxxx Dev).
-// Правило обёртки: интерактивна ТОЛЬКО навигация (сайдбар, вкладки представлений, переключатели экранов).
-// Все остальные элементы присутствуют, имеют hover/press-состояния, но осознанно бездействуют.
+// XXLcrm — приложение целиком (стиль yoyoloxxx Dev).
+// Правило: в интерфейсе не должно быть кнопок-обманок. Всё, что выглядит рабочим, работает;
+// то, чего ещё нет, лежит в блоке «Скоро» с честной подписью и компонентом Idle.
 import { useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, recTitle, recById, allEntities, dispCtx, collapseFieldRuns } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, setWsMeta, recTitle, recById, allEntities, dispCtx, collapseFieldRuns } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -12,9 +12,10 @@ import { IntegrationsLive, TemplatesLive } from "@/components/live/SettingsLive"
 import { RoutingLive } from "@/components/live/RoutingLive";
 import { CommandPalette } from "@/components/live/CommandPalette";
 import { CalendarLive } from "@/components/live/CalendarLive";
+import { ImportDialog } from "@/components/live/ImportDialog";
 import { getViewState, setViewState } from "@/lib/viewstate";
 import { initIntegrations } from "@/lib/integrations";
-import { cloudBoot } from "@/lib/cloud";
+import { cloudBoot, renameWs } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
 import { PresetPicker } from "@/components/live/PresetPicker";
@@ -28,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { Rec } from "@/lib/model";
 import { DAY, now, fmtMoney, relTime, plural, displayValue } from "@/lib/model";
 import {
-  Bell, Calendar, Copy, LogIn,
+  Calendar, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks,
   Moon, Package, PanelLeft, Plus,
   Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap,
@@ -49,12 +50,12 @@ const TITLES: Record<string, string> = {
   dashboard: "Дашборд", automations: "Автоматизации", settings: "Настройки",
 };
 
-// Бездействующая кнопка: выглядит и нажимается как настоящая, но ничего не делает (правило обёртки)
+// Кнопка «Скоро»: только для блока честных заглушек — в рабочих местах интерфейса её быть не должно
 function Idle({ children, className, primary, title }: { children: React.ReactNode; className?: string; primary?: boolean; title?: string }) {
   return (
     <button
       type="button"
-      title={title ?? "В обёртке активна только навигация"}
+      title={title ?? "Появится после серверной части"}
       className={cn(
         "press inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] transition-colors duration-150",
         primary
@@ -82,6 +83,7 @@ export default function App() {
   const [page, setPage] = useState<Page>("ent:deals");
   const [newEnt, setNewEnt] = useState(false);
   const [palette, setPalette] = useState(false); // Ctrl+K — общий поиск по всему пространству
+  const [sidebar, setSidebar] = useState(true);  // сворачивание — чтобы на ноутбуке таблице доставалась вся ширина
   const [presets, setPresets] = useState(false); // выбор пресета ниши
   const [presetsOnboarding, setPresetsOnboarding] = useState(false); // пикер открылся сам на пустом пространстве
   const openPresets = () => { setPresetsOnboarding(false); setPresets(true); };
@@ -137,11 +139,11 @@ export default function App() {
       <div className="grain" />
 
       {/* ─── Сайдбар ─── */}
-      <aside className="flex w-[232px] shrink-0 flex-col border-r" style={{ background: "hsl(var(--sidebar))" }}>
+      <aside className={cn("flex shrink-0 flex-col overflow-hidden border-r transition-[width] duration-200", sidebar ? "w-[232px]" : "w-0 border-r-0")} style={{ background: "hsl(var(--sidebar))" }}>
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.10</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.11</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -161,8 +163,8 @@ export default function App() {
             title="Войти или создать аккаунт — данные станут общими для команды"
             className="press mx-3 mb-3 flex items-center justify-between gap-2 rounded-md border border-dashed bg-card px-2.5 py-[7px] text-left transition-colors duration-150 hover:border-foreground/25">
             <span>
-              <span className="block text-[12.5px] font-medium">Digital Loft</span>
-              <span className="block text-[9.5px] text-muted-foreground">демо · войти в аккаунт</span>
+              <span className="block truncate text-[12.5px] font-medium">{s.wsName}</span>
+              <span className="block text-[9.5px] text-muted-foreground">только это устройство · войти</span>
             </span>
             <LogIn className="size-3.5 shrink-0 text-muted-foreground" />
           </button>
@@ -217,7 +219,10 @@ export default function App() {
       {/* ─── Основная область ─── */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[50px] shrink-0 items-center gap-1.5 border-b px-3.5">
-          <Idle className="h-7 w-7 justify-center border-0 px-0 text-muted-foreground"><PanelLeft className="size-4" /></Idle>
+          <button onClick={() => setSidebar(v => !v)} title={sidebar ? "Свернуть панель" : "Показать панель"}
+            className="press grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+            <PanelLeft className="size-4" />
+          </button>
           <button onClick={() => setPalette(true)} title="Поиск по всему: записи, диалоги, задачи (Ctrl+K)"
             className="press relative ml-1 flex h-8 w-full max-w-sm items-center overflow-hidden whitespace-nowrap rounded-md bg-muted/70 pl-8 pr-14 text-left text-[12.5px] text-muted-foreground/90 transition-colors hover:bg-muted">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -237,10 +242,6 @@ export default function App() {
           >
             {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
           </button>
-          <Idle className="relative h-8 w-8 justify-center border-0 px-0 text-muted-foreground">
-            <Bell className="size-4" />
-            <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full" style={{ background: "hsl(var(--brass))" }} />
-          </Idle>
           {s.mode === "cloud" ? (() => { const me = s.users.find(u => u.id === s.currentUserId); return (
             <button className="press h-8 px-1" title={me?.name ?? ""} onClick={() => setPage("settings")}>
               <Avatar n={(me?.name ?? "?").trim().charAt(0).toUpperCase() || "?"} hue={me?.hue ?? 42} size={26} />
@@ -249,7 +250,8 @@ export default function App() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto">
-          {page === "myday" && <MyDayLive goTasks={() => setPage("tasks")} goInbox={() => setPage("inbox")} />}
+          {page === "myday" && <MyDayLive goTasks={() => setPage("tasks")} goInbox={() => setPage("inbox")}
+            goSettings={() => setPage("settings")} onPresets={openPresets} goEntity={() => setPage("ent:" + (s.entities[0]?.id ?? "deals"))} />}
           {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
@@ -259,7 +261,7 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.10 · маршруты приёма, поиск по всему (Ctrl+K), переписка в карточке, живой календарь, память вкладок</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.11 · загрузка из Excel, маршруты приёма, поиск по всему (Ctrl+K), переписка в карточке, живой календарь</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -302,6 +304,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   const [q, setQ] = useState(saved.q);
   const [mine, setMine] = useState(saved.mine);
   const [seg, setSeg] = useState(saved.seg);
+  const [importOpen, setImportOpen] = useState(false);
   const count = recordsOf(id).length;
   const lastAct = (rid: string) => {
     let last = recById(rid)?.updatedAt ?? 0;
@@ -336,7 +339,10 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
           </button>
-          <Idle title="Импорт CSV — следующая итерация"><FileUp className="size-3" /> Импорт</Idle>
+          <button onClick={() => setImportOpen(true)} title="Загрузить клиентов и заказы из Excel или другой CRM"
+            className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
+            <FileUp className="size-3" /> Загрузить
+          </button>
           <button onClick={() => A.openRecord(A.createRecord(id, {}))}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground transition-colors duration-150 hover:opacity-90">
             <Plus className="size-3.5" /> {e.name}
@@ -385,6 +391,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
         {activeView === "table" && <TableLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "calendar" && <CalendarLive entity={e} filter={filterOn ? pred : undefined} />}
       </div>
+      <ImportDialog entity={e} open={importOpen} onOpenChange={setImportOpen} />
     </div>
   );
 }
@@ -548,6 +555,21 @@ function Dashboard({ onPresets }: { onPresets?: () => void }) {
   );
 }
 
+// Название пространства: в облаке переименовывает команду, локально — просто подпись
+function WorkspaceName() {
+  const s = useApp();
+  const [v, setV] = useState(s.wsName);
+  useEffect(() => { setV(s.wsName); }, [s.wsName]);
+  const save = () => { const n = v.trim(); if (!n || n === s.wsName) return; if (s.mode === "cloud") void renameWs(n); else setWsMeta(n, s.inviteCode); };
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <input value={v} onChange={e => setV(e.target.value)} onBlur={save} onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        className="h-9 w-full max-w-xs rounded-md border bg-background px-2.5 text-[13px] outline-none transition-colors focus:border-ring" />
+      <span className="text-[11.5px] text-muted-foreground">{s.mode === "cloud" ? "видит вся команда" : "локально · войдите, чтобы делиться"}</span>
+    </div>
+  );
+}
+
 function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
   return (
     <div className="cascade mx-auto max-w-2xl px-5 py-6">
@@ -556,7 +578,7 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
         <div className="px-4 py-3.5">
           <div className="text-[13px] font-semibold">Пространство</div>
           <label className="eyebrow mt-3 block">Название компании</label>
-          <input readOnly value="Digital Loft" title="В обёртке активна только навигация" className="mt-1 h-9 w-full max-w-xs cursor-default rounded-md border bg-background px-2.5 text-[13px] outline-none" />
+          <WorkspaceName />
           <label className="eyebrow mt-3.5 block">Тема</label>
           <div className="mt-1.5 flex gap-1.5">
             {([["light", "Светлая", SunMedium], ["dark", "Тёмная", Moon]] as const).map(([id, label, Ic]) => (
@@ -572,6 +594,8 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
         </div>
         <IntegrationsLive />
         <RoutingLive />
+        <TemplatesLive />
+        <TeamLive />
         <div className="px-4 py-3.5">
           <div className="text-[13px] font-semibold">Скоро</div>
           <div className="mt-2.5 flex flex-col gap-2">
@@ -580,6 +604,14 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
               <div className="min-w-0 flex-1">
                 <span className="block text-[12.5px] font-medium">Instagram · через провайдера</span>
                 <span className="block text-[11px] leading-snug text-muted-foreground">без VPN нужен провайдер (Wazzup/Umnico) и серверная часть — подключу на шаге Supabase</span>
+              </div>
+              <Idle title="Появится после серверной части (шаг Supabase)">Скоро</Idle>
+            </div>
+            <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-2.5">
+              <Sparkles className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium">AI-ассистент</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">резюме карточки, черновик ответа, «спроси CRM» — ключ будет храниться на сервере, а не в браузере</span>
               </div>
               <Idle title="Появится после серверной части (шаг Supabase)">Скоро</Idle>
             </div>
@@ -593,16 +625,6 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
             </div>
           </div>
         </div>
-        <TemplatesLive />
-        <div className="px-4 py-3.5">
-          <div className="flex items-center gap-1.5 text-[13px] font-semibold"><Sparkles className="size-3.5" style={{ color: "var(--brass-ink)" }} /> AI-ассистент</div>
-          <p className="mt-1 text-[12px] text-muted-foreground">Резюме записей, черновики ответов, «спроси CRM». Ключ хранится локально.</p>
-          <div className="mt-2 flex gap-2">
-            <input readOnly placeholder="API-ключ (OpenRouter и совместимые)" title="В обёртке активна только навигация" className="h-9 flex-1 cursor-default rounded-md border bg-background px-2.5 text-[12.5px] outline-none placeholder:text-muted-foreground/70" />
-            <Idle primary className="h-9">Сохранить</Idle>
-          </div>
-        </div>
-        <TeamLive />
       </div>
     </div>
   );

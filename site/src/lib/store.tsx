@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule, Route, InboundSource } from "./model";
 import { uid, now, plural, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, defaultRoutes, sourceName, OWNER_ROUND, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
+import { markSetup } from "./setup";
 import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset } from "./presets";
 
 interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
@@ -357,6 +358,97 @@ export const A = {
     ruleHooks.created?.(id);
     return id;
   },
+  // Импорт таблицы: одна мутация на весь файл (а не 500 сохранений), автоматизации НЕ дёргаем —
+  // иначе загрузка старой базы породила бы сотни задач «связаться». Ctrl+Z отменяет импорт целиком.
+  importRecords(
+    entityId: string,
+    mapping: (string | null)[],
+    rows: string[][],
+    opts: { mergeByPhone?: boolean; stageId?: string; ownerId?: string } = {}
+  ): { created: number; merged: number } {
+    let created = 0, merged = 0;
+    pushHistory();
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId)!;
+      const fieldOf = (id: string) => e.fields.find(f => f.id === id);
+      const phoneF = e.fields.find(f => f.type === "phone");
+      let num = s.records.filter(x => x.entityId === entityId).length;
+      for (const row of rows) {
+        const values: Record<string, unknown> = {};
+        let stageId = opts.stageId ?? e.stages?.[0]?.id;
+        mapping.forEach((target, i) => {
+          const raw = (row[i] ?? "").trim();
+          if (!target || !raw) return;
+          if (target === "__stage") {
+            const st2 = e.stages?.find(x => x.label.toLowerCase() === raw.toLowerCase());
+            if (st2) stageId = st2.id;
+            return;
+          }
+          const f = fieldOf(target); if (!f) return;
+          switch (f.type) {
+            case "money": case "number": {
+              const n = Number(raw.replace(/[^\d,.-]/g, "").replace(/\s/g, "").replace(",", "."));
+              if (!isNaN(n)) values[f.id] = n;
+              break;
+            }
+            case "date": case "datetime": {
+              const ts = parseRuDate(raw); if (ts) values[f.id] = ts;
+              break;
+            }
+            case "select": {
+              if (!f.options) f.options = [];
+              let o = f.options.find(x => x.label.toLowerCase() === raw.toLowerCase());
+              if (!o) { o = { id: uid("o"), label: raw, color: PALETTE[f.options.length % PALETTE.length] }; f.options.push(o); }
+              values[f.id] = o.id;
+              break;
+            }
+            case "user": {
+              const u = s.users.find(x => x.name.toLowerCase().includes(raw.toLowerCase()));
+              if (u) values[f.id] = u.id;
+              break;
+            }
+            case "relation": {
+              const target2 = s.entities.find(x => x.id === f.relationTo);
+              if (!target2) break;
+              const found = s.records.find(r => r.entityId === target2.id && String(r.values[target2.titleFieldId] ?? "").toLowerCase() === raw.toLowerCase());
+              if (found) { values[f.id] = found.id; break; }
+              // связанного клиента нет — заводим на лету, чтобы связь не потерялась
+              const nr: Rec = {
+                id: uid("r"), entityId: target2.id, num: s.records.filter(x => x.entityId === target2.id).length + 1,
+                values: { [target2.titleFieldId]: raw }, ownerId: opts.ownerId ?? s.currentUserId,
+                createdAt: now(), updatedAt: now(), stageId: target2.stages?.[0]?.id, stageAt: now(), pos: 1000,
+              };
+              s.records.push(nr);
+              values[f.id] = nr.id;
+              break;
+            }
+            default: values[f.id] = raw;
+          }
+        });
+        if (!Object.keys(values).length) continue;
+        // дедуп: тот же телефон — дополняем существующую запись, а не плодим вторую
+        const dup = opts.mergeByPhone && phoneF && values[phoneF.id]
+          ? s.records.find(r => r.entityId === entityId && phoneDigits(r.values[phoneF.id]) === phoneDigits(values[phoneF.id]))
+          : undefined;
+        if (dup) {
+          for (const [k, v] of Object.entries(values)) if (dup.values[k] === undefined || dup.values[k] === "") dup.values[k] = v;
+          dup.updatedAt = now();
+          merged++;
+          continue;
+        }
+        const r: Rec = {
+          id: uid("r"), entityId, num: ++num, values,
+          ownerId: opts.ownerId ?? s.currentUserId, createdAt: now(), updatedAt: now(),
+          stageId, stageAt: now(), pos: (num + 1) * 1000,
+        };
+        s.records.push(r);
+        s.activities.push({ id: uid("a"), recordId: r.id, ts: now(), kind: "created", text: "Загружено из файла", userId: s.currentUserId });
+        created++;
+      }
+    });
+    if (created || merged) markSetup("imported");
+    return { created, merged };
+  },
   deleteRecord(recId: string) {
     pushHistory();
     mut(s => {
@@ -564,6 +656,7 @@ export const A = {
       stages: withPipeline ? defaultStages() : undefined,
     };
     mut(s => s.entities.push(ent));
+    markSetup("structure");
     toast.success(`Раздел «${ent.namePlural}» создан`, { description: "Настройте поля и стадии под себя" });
     return id;
   },
@@ -588,6 +681,7 @@ export const A = {
       s.activeChatId = null;
       repairStructure(s); // маршруты приёма переезжают на разделы нового шаблона
     });
+    markSetup("structure");
     const desc = p.custom ? "Разделы и автоматизации применены — можно отменить (Ctrl+Z)" : "Разделы, воронка, автоматизации и примеры настроены — можно отменить (Ctrl+Z)";
     toast.success(`Шаблон «${p.label}» применён`, { description: desc });
     return true;
