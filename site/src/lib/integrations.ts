@@ -84,6 +84,7 @@ export async function waConnect(apiUrl: string, idInstance: string, apiToken: st
 async function waTick() {
   const cfg = ints().wa;
   if (cfg.status !== "ok") return;
+  if (cfg.mode === "hook") return; // приём идёт на сервер
   try {
     for (let n = 0; n < 5; n++) {
       const res = await fetch(waApi("receiveNotification") + "?receiveTimeout=1");
@@ -138,6 +139,7 @@ export async function maxConnect(token: string): Promise<void> {
 async function maxTick() {
   const cfg = ints().max;
   if (cfg.status !== "ok" || !cfg.token) return;
+  if (cfg.mode === "hook") return; // приём идёт на сервер
   try {
     const res = await fetch(maxApi("updates", `&limit=30&timeout=0${cfg.marker ? `&marker=${cfg.marker}` : ""}`));
     if (!res.ok) return;

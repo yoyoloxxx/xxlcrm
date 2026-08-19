@@ -9,6 +9,17 @@ import type { InboundSource } from "./model";
 export const hookUrl = (ws: string, source: InboundSource, secret: string) =>
   `${SUPA_URL}/functions/v1/hook?ws=${ws}&src=${source}&k=${secret}`;
 
+// Проверка, что развёрнутая серверная функция уже умеет этот источник (иначе вебхук уйдёт в старую версию)
+export async function serverSupports(source: InboundSource): Promise<boolean> {
+  try {
+    const r = await fetch(`${SUPA_URL}/functions/v1/hook`);
+    const d = await r.json();
+    if (Array.isArray(d?.sources) && d.sources.includes(source)) return true;
+  } catch { /* сети нет — считаем, что рано */ }
+  toast.error("Серверная функция ещё не обновлена", { description: "Приём этого канала появится после обновления функции hook" });
+  return false;
+}
+
 const rnd = () => (crypto.randomUUID?.() ?? String(Math.random())).replace(/-/g, "");
 
 // секрет вебхука пространства: создаётся один раз и живёт в базе (его знает и функция, и владелец канала)
@@ -39,6 +50,75 @@ export async function tgUseServer(token: string): Promise<boolean> {
   A.intPatch(i => { i.tg.mode = "hook"; });
   toast.success("Telegram переведён на сервер", { description: "Заявки приходят даже при закрытом браузере" });
   return true;
+}
+
+// WhatsApp (Green API): вебхук вместо опроса очереди из браузера
+export async function waUseServer(): Promise<boolean> {
+  const ws = getState().wsId;
+  const w = getState().integrations.wa;
+  if (!ws) { toast.error("Сначала войдите в общее пространство"); return false; }
+  if (!(await serverSupports("wa"))) return false;
+  const secret = await ensureHookSecret("wa");
+  if (!secret) return false;
+  const url = hookUrl(ws, "wa", secret);
+  const api = `${w.apiUrl.replace(/\/$/, "")}/waInstance${w.idInstance}/setSettings/${w.apiToken}`;
+  const res = await fetch(api, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhookUrl: url, incomingWebhook: "yes", outgoingMessageWebhook: "no", stateWebhook: "no" }),
+  }).then(r => r.json()).catch(() => null);
+  if (!res) { toast.error("Green API не принял вебхук"); return false; }
+  A.intPatch(i => { i.wa.mode = "hook"; });
+  toast.success("WhatsApp переведён на сервер");
+  return true;
+}
+export async function waUsePolling(): Promise<void> {
+  const w = getState().integrations.wa;
+  await fetch(`${w.apiUrl.replace(/\/$/, "")}/waInstance${w.idInstance}/setSettings/${w.apiToken}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhookUrl: "", incomingWebhook: "no" }),
+  }).catch(() => null);
+  A.intPatch(i => { i.wa.mode = "poll"; });
+  toast("WhatsApp снова читается из браузера");
+}
+
+// MAX: подписка на вебхук вместо опроса updates
+export async function maxUseServer(token: string): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) { toast.error("Сначала войдите в общее пространство"); return false; }
+  if (!(await serverSupports("max"))) return false;
+  const secret = await ensureHookSecret("max");
+  if (!secret) return false;
+  const url = hookUrl(ws, "max", secret);
+  const res = await fetch(`https://botapi.max.ru/subscriptions?access_token=${encodeURIComponent(token)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }),
+  }).catch(() => null);
+  if (!res?.ok) { toast.error("MAX не принял подписку на вебхук"); return false; }
+  A.intPatch(i => { i.max.mode = "hook"; });
+  toast.success("MAX переведён на сервер");
+  return true;
+}
+export async function maxUsePolling(token: string): Promise<void> {
+  const ws = getState().wsId;
+  const secret = ws ? await ensureHookSecret("max") : null;
+  if (ws && secret) {
+    await fetch(`https://botapi.max.ru/subscriptions?access_token=${encodeURIComponent(token)}&url=${encodeURIComponent(hookUrl(ws, "max", secret))}`, { method: "DELETE" }).catch(() => null);
+  }
+  A.intPatch(i => { i.max.mode = "poll"; });
+  toast("MAX снова читается из браузера");
+}
+
+// ---------- уведомления о заявках в Telegram ----------
+export const notifyLink = (botName: string, ws: string) => `https://t.me/${botName.replace(/^@/, "")}?start=notify_${ws}`;
+export async function notifyTargets(): Promise<{ chat_id: string; name: string | null }[]> {
+  const ws = getState().wsId;
+  if (!ws) return [];
+  const { data } = await supa.from("notify_targets").select("chat_id, name").eq("workspace_id", ws);
+  return (data ?? []) as { chat_id: string; name: string | null }[];
+}
+export async function notifyRemove(chatId: string): Promise<void> {
+  const ws = getState().wsId;
+  if (!ws) return;
+  await supa.from("notify_targets").delete().eq("workspace_id", ws).eq("chat_id", chatId);
 }
 
 export async function tgUsePolling(token: string): Promise<void> {

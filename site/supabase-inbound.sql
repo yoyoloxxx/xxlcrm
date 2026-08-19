@@ -40,6 +40,19 @@ drop policy if exists inbound_all on public.inbound;
 create policy inbound_all on public.inbound for all
   using (public.is_member(workspace_id)) with check (public.is_member(workspace_id));
 
+-- Кому сервер пишет о новой заявке в Telegram (подписка через «/start notify_<ws>» у своего бота)
+create table if not exists public.notify_targets (
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  chat_id text not null,
+  name text,
+  created_at timestamptz not null default now(),
+  primary key (workspace_id, chat_id)
+);
+alter table public.notify_targets enable row level security;
+drop policy if exists notify_all on public.notify_targets;
+create policy notify_all on public.notify_targets for all
+  using (public.is_member(workspace_id)) with check (public.is_member(workspace_id));
+
 -- realtime: незакрытая вкладка получает входящее мгновенно
 alter table public.inbound replica identity full;
 do $$ begin

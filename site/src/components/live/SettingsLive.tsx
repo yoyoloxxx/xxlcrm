@@ -1,17 +1,19 @@
 // Живые секции настроек: интеграции каналов и шаблоны ответов
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { IntStatus } from "@/lib/model";
 import { useApp, A } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, ensureHookSecret, hookUrl } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
+import { Bell, Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const SOFT = "text-[11.5px] leading-snug text-muted-foreground";
 
 function Status({ st, okText = "подключено" }: { st: IntStatus; okText?: string }) {
   if (st === "off") return null;
@@ -123,6 +125,65 @@ function TgUserCard() {
   );
 }
 
+// Общий переключатель «приём на сервере»: браузер перестаёт быть транспортом канала
+function ServerIntake({ on, cloud, onChange }: { on: boolean; cloud: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className={cn("mt-2 flex items-center justify-between gap-3 rounded-md border border-dashed p-2.5", cloud ? "cursor-pointer" : "opacity-60")}>
+      <span>
+        <span className="block text-[12px] font-medium">Приём на сервере{on ? " — включён" : ""}</span>
+        <span className="block text-[11px] leading-snug text-muted-foreground">
+          {!cloud ? "Нужно общее пространство: войдите в аккаунт, тогда заявки будут приходить и при закрытом браузере"
+            : on ? "Сообщения идут на наш сервер и становятся заявками, даже когда браузер закрыт"
+            : "Сейчас канал читается из этой вкладки: закрыли браузер — сообщения ждут"}
+        </span>
+      </span>
+      <Switch checked={on} disabled={!cloud} onCheckedChange={onChange} />
+    </label>
+  );
+}
+
+// Кому писать о новой заявке: подписка через «/start» у своего же бота
+function NotifyCard() {
+  const s = useApp();
+  const [list, setList] = useState<{ chat_id: string; name: string | null }[]>([]);
+  const bot = s.integrations.tg.botName ?? "";
+  const refresh = () => { void notifyTargets().then(setList); };
+  useEffect(() => { if (s.mode === "cloud") refresh(); }, [s.mode, s.wsId]);
+  if (s.mode !== "cloud" || s.integrations.tg.status !== "ok" || !bot) return null;
+  const link = notifyLink(bot, s.wsId ?? "");
+  return (
+    <div className="mt-2 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+        <Bell className="size-3.5 text-muted-foreground" /> Уведомления о заявках
+        <button onClick={refresh} className="press ml-auto text-[11px] font-normal text-muted-foreground hover:text-foreground">обновить</button>
+      </div>
+      <p className={cn("mt-1", SOFT)}>
+        Сервер напишет вам в Telegram о каждой новой заявке — CRM для этого открывать не нужно.
+        Откройте ссылку и нажмите «Start» у своего бота {bot}.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <a href={link} target="_blank" rel="noreferrer"
+          className="press inline-flex h-9 items-center rounded-md bg-primary px-3 text-[12.5px] font-medium text-primary-foreground hover:opacity-90">
+          Подключить уведомления
+        </a>
+        <Button variant="outline" className="h-9 gap-1.5" onClick={() => { navigator.clipboard?.writeText(link).then(() => toast("Ссылка скопирована — откройте её на телефоне")); }}>
+          <Copy className="size-3.5" />
+        </Button>
+      </div>
+      {list.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1">
+          {list.map(t => (
+            <div key={t.chat_id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[12px]">
+              <span className="min-w-0 flex-1 truncate">{t.name || "получатель"}</span>
+              <button onClick={() => { void notifyRemove(t.chat_id).then(refresh); }} className="press text-[11px] text-muted-foreground hover:text-destructive">убрать</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function IntegrationsLive() {
   const s = useApp();
   const ints = s.integrations;
@@ -164,17 +225,7 @@ export function IntegrationsLive() {
           <Button className="h-9" disabled={!tgToken.trim() || ints.tg.status === "connecting"} onClick={() => tgConnect(tgToken)}>Подключить</Button>
         </div>
         {ints.tg.status === "ok" && (
-          <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-md border border-dashed p-2.5">
-            <span>
-              <span className="block text-[12px] font-medium">Приём на сервере {ints.tg.mode === "hook" ? "— включён" : ""}</span>
-              <span className="block text-[11px] leading-snug text-muted-foreground">
-                {ints.tg.mode === "hook"
-                  ? "Сообщения идут на наш сервер и становятся заявками, даже когда браузер закрыт"
-                  : "Сейчас бот опрашивается из этой вкладки: закрыли браузер — сообщения ждут. Включите, чтобы приходили всегда"}
-              </span>
-            </span>
-            <Switch checked={ints.tg.mode === "hook"} onCheckedChange={v => { if (v) void tgUseServer(ints.tg.token); else void tgUsePolling(ints.tg.token); }} />
-          </label>
+          <ServerIntake on={ints.tg.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void tgUseServer(ints.tg.token); else void tgUsePolling(ints.tg.token); }} />
         )}
         {ints.tg.status === "ok" && (
           <Button variant="outline" className="mt-2 h-8 text-[12px]"
@@ -196,6 +247,9 @@ export function IntegrationsLive() {
           <Input className="h-9 text-[12.5px]" type="password" placeholder="apiTokenInstance" value={waToken} onChange={e => setWaToken(e.target.value)} />
           <Button className="h-9" disabled={!waId.trim() || !waToken.trim() || ints.wa.status === "connecting"} onClick={() => waConnect(waUrl, waId, waToken)}>Подключить</Button>
         </div>
+        {ints.wa.status === "ok" && (
+          <ServerIntake on={ints.wa.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void waUseServer(); else void waUsePolling(); }} />
+        )}
       </div>
 
       <div className="mt-2 rounded-md border p-3">
@@ -207,9 +261,14 @@ export function IntegrationsLive() {
         <div className="mt-2 flex gap-2">
           <Input className="h-9 flex-1 text-[12.5px]" type="password" placeholder="токен бота MAX" value={maxToken} onChange={e => setMaxToken(e.target.value)} />
           <Button className="h-9" disabled={!maxToken.trim() || ints.max.status === "connecting"} onClick={() => maxConnect(maxToken)}>Подключить</Button>
-          {ints.max.status === "ok" && <Button variant="outline" className="h-9" onClick={() => { A.intPatch(i => { i.max = { token: "", status: "off" }; }); setMaxToken(""); }}>Откл.</Button>}
+          {ints.max.status === "ok" && <Button variant="outline" className="h-9" onClick={() => { if (ints.max.mode === "hook") void maxUsePolling(ints.max.token); A.intPatch(i => { i.max = { token: "", status: "off" }; }); setMaxToken(""); }}>Откл.</Button>}
         </div>
+        {ints.max.status === "ok" && (
+          <ServerIntake on={ints.max.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void maxUseServer(ints.max.token); else void maxUsePolling(ints.max.token); }} />
+        )}
       </div>
+
+      <NotifyCard />
 
       {!!ownHook && (
         <div className="mt-2 rounded-md border p-3">

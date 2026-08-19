@@ -37,8 +37,8 @@ export type TguStage = "creds" | "code" | "password"; // шаги входа в 
 export interface Integrations {
   tgUser: { apiId: string; apiHash: string; phone: string; session: string; status: IntStatus; stage?: TguStage; name?: string; error?: string };
   tg: { token: string; status: IntStatus; botName?: string; offset?: number; error?: string; mode?: "poll" | "hook" }; // hook = приём на сервере
-  wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string };
-  max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string };
+  wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string; mode?: "poll" | "hook" };
+  max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string; mode?: "poll" | "hook" };
   tilda: { hookId: string; status: IntStatus; seen: string[]; error?: string };
   autoLead: boolean;
 }
