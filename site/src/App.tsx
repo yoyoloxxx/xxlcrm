@@ -9,6 +9,10 @@ import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
 import { InboxLive } from "@/components/live/InboxLive";
 import { IntegrationsLive, TemplatesLive } from "@/components/live/SettingsLive";
+import { RoutingLive } from "@/components/live/RoutingLive";
+import { CommandPalette } from "@/components/live/CommandPalette";
+import { CalendarLive } from "@/components/live/CalendarLive";
+import { getViewState, setViewState } from "@/lib/viewstate";
 import { initIntegrations } from "@/lib/integrations";
 import { cloudBoot } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
@@ -77,6 +81,7 @@ export default function App() {
   const s = useApp();
   const [page, setPage] = useState<Page>("ent:deals");
   const [newEnt, setNewEnt] = useState(false);
+  const [palette, setPalette] = useState(false); // Ctrl+K — общий поиск по всему пространству
   const [presets, setPresets] = useState(false); // выбор пресета ниши
   const [presetsOnboarding, setPresetsOnboarding] = useState(false); // пикер открылся сам на пустом пространстве
   const openPresets = () => { setPresetsOnboarding(false); setPresets(true); };
@@ -113,6 +118,9 @@ export default function App() {
   }, [entId, s.entities]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      const inField = () => { const t = e.target as HTMLElement | null; return !!t?.closest("input,textarea,[contenteditable]"); };
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette(v => !v); return; }
+      if (e.key === "/" && !inField()) { e.preventDefault(); setPalette(true); return; }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         const t = e.target as HTMLElement | null;
         if (t && t.closest("input,textarea,[contenteditable]")) return;
@@ -133,7 +141,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.9.6</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.10</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -210,15 +218,18 @@ export default function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[50px] shrink-0 items-center gap-1.5 border-b px-3.5">
           <Idle className="h-7 w-7 justify-center border-0 px-0 text-muted-foreground"><PanelLeft className="size-4" /></Idle>
-          <div className="relative ml-1 w-full max-w-sm">
+          <button onClick={() => setPalette(true)} title="Поиск по всему: записи, диалоги, задачи (Ctrl+K)"
+            className="press relative ml-1 flex h-8 w-full max-w-sm items-center overflow-hidden whitespace-nowrap rounded-md bg-muted/70 pl-8 pr-14 text-left text-[12.5px] text-muted-foreground/90 transition-colors hover:bg-muted">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input readOnly placeholder="Поиск по всем разделам…" title="В обёртке активна только навигация"
-              className="h-8 w-full cursor-default rounded-md border-0 bg-muted/70 pl-8 pr-10 text-[12.5px] outline-none placeholder:text-muted-foreground/80" />
-            <kbd className="font-mono2 absolute right-2 top-1/2 -translate-y-1/2 rounded border bg-card px-1 text-[10px] text-muted-foreground">/</kbd>
-          </div>
+            <span className="truncate">Поиск: записи, диалоги, задачи…</span>
+            <kbd className="font-mono2 absolute right-2 top-1/2 -translate-y-1/2 rounded border bg-card px-1 text-[10px] text-muted-foreground">Ctrl K</kbd>
+          </button>
           <div className="flex-1" />
-          <span className="pulse-dot mr-1 hidden size-1.5 rounded-full sm:block" style={{ background: "hsl(var(--brass))" }} title="Синхронизация активна (демо)" />
-          <span className="font-mono2 hidden text-[10.5px] text-muted-foreground sm:block">синхронизировано</span>
+          <button onClick={() => setPage("settings")} className="press mr-1 hidden items-center gap-1.5 rounded-md px-1.5 py-1 sm:flex"
+            title={s.mode === "cloud" ? `Общее пространство «${s.wsName}»: данные видит вся команда и они одинаковы на всех устройствах` : "Данные лежат только в этом браузере. Включите общее пространство — и они будут на всех устройствах и у команды"}>
+            <span className={cn("size-1.5 rounded-full", s.mode === "cloud" && "pulse-dot")} style={{ background: s.mode === "cloud" ? "hsl(var(--brass))" : "hsl(var(--muted-foreground))" }} />
+            <span className="font-mono2 text-[10.5px] text-muted-foreground">{s.mode === "cloud" ? "облако · синхронно" : "только это устройство"}</span>
+          </button>
           <button
             onClick={() => setTheme(t => (t === "light" ? "dark" : "light"))}
             title={theme === "light" ? "Тёмная тема" : "Светлая тема"}
@@ -248,11 +259,12 @@ export default function App() {
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.9.6 · живое: всё — дашборд, автоматизации, фильтры и сегменты, узнавание клиентов, разделы, Входящие, Задачи</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.10 · маршруты приёма, поиск по всему (Ctrl+K), переписка в карточке, живой календарь, память вкладок</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
 
+      <CommandPalette open={palette} onClose={() => setPalette(false)} goPage={setPage} />
       {s.drawerRecordId && <RecordDrawer recordId={s.drawerRecordId} />}
       {s.authStage && <AuthOverlay stage={s.authStage} />}
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
@@ -284,10 +296,12 @@ type ViewId = "kanban" | "table" | "calendar";
 function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) {
   const e = entityCfg(id);
   const hasStages = !!e.stages?.length;
-  const [view, setView] = useState<ViewId>(hasStages ? "kanban" : "table");
-  const [q, setQ] = useState("");
-  const [mine, setMine] = useState(false);
-  const [seg, setSeg] = useState("all");
+  // состояние вкладки и фильтров запоминается по разделу: переключение представлений и переходы ничего не сбрасывают
+  const saved = getViewState(id);
+  const [view, setView] = useState<ViewId>((saved.view as ViewId) || (hasStages ? "kanban" : "table"));
+  const [q, setQ] = useState(saved.q);
+  const [mine, setMine] = useState(saved.mine);
+  const [seg, setSeg] = useState(saved.seg);
   const count = recordsOf(id).length;
   const lastAct = (rid: string) => {
     let last = recById(rid)?.updatedAt ?? 0;
@@ -310,9 +324,10 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   };
   const shown = filterOn ? recordsOf(id).filter(pred).length : count;
   const tabs: [ViewId, string, React.ElementType][] = hasStages
-    ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ...(id === "deals" ? [["calendar", "Календарь", Calendar] as [ViewId, string, React.ElementType]] : [])]
-    : [["table", "Таблица", Table2]];
+    ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]]
+    : [["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]];
   const activeView = tabs.some(t => t[0] === view) ? view : tabs[0][0];
+  useEffect(() => { setViewState(id, { view: activeView, q, mine, seg }); }, [id, activeView, q, mine, seg]);
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-5 pt-4">
@@ -368,7 +383,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
       <div className="min-h-0 flex-1 overflow-auto">
         {activeView === "kanban" && hasStages && <KanbanLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "table" && <TableLive entity={e} filter={filterOn ? pred : undefined} />}
-        {activeView === "calendar" && <DealsCalendar />}
+        {activeView === "calendar" && <CalendarLive entity={e} filter={filterOn ? pred : undefined} />}
       </div>
     </div>
   );
@@ -556,6 +571,7 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
           </div>
         </div>
         <IntegrationsLive />
+        <RoutingLive />
         <div className="px-4 py-3.5">
           <div className="text-[13px] font-semibold">Скоро</div>
           <div className="mt-2.5 flex flex-col gap-2">
@@ -592,53 +608,6 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
   );
 }
 
-function DealsCalendar() {
-  const events: Record<number, { t: string; tone: number }[]> = {
-    17: [{ t: "11:30 Звонок: смета", tone: 4 }],
-    18: [{ t: "15:00 Zoom: договор", tone: 1 }],
-    19: [{ t: "ДР: Ксения Макарова", tone: 1 }, { t: "Дедлайн: лендинг", tone: 3 }],
-    21: [{ t: "Показ макетов", tone: 2 }],
-    24: [{ t: "ДР: Виктор Гусев", tone: 1 }],
-    26: [{ t: "Оплата по графику", tone: 5 }],
-  };
-  const tones = ["#8A8578", "#BC9F5C", "#7D8A5C", "#B0725A", "#6E8B8A", "#6E8B4F"];
-  return (
-    <div className="cascade flex-1 overflow-y-auto p-4">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-[13.5px] font-semibold capitalize">август 2026</span>
-        <div className="ml-auto flex gap-1.5">
-          <Idle>‹</Idle><Idle>Сегодня</Idle><Idle>›</Idle>
-        </div>
-      </div>
-      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg border bg-border">
-        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map(w => (
-          <div key={w} className="bg-background px-2 py-1.5 text-center text-[10.5px] font-medium text-muted-foreground">{w}</div>
-        ))}
-        {Array.from({ length: 35 }, (_, i) => {
-          const day = i - 4; // 1 августа 2026 — суббота
-          const inMonth = day >= 1 && day <= 31;
-          const isToday = day === 16;
-          return (
-            <div key={i} className={cn("min-h-[84px] bg-card p-1.5", !inMonth && "bg-muted/40")}>
-              {inMonth && (
-                <>
-                  <span className={cn("font-mono2 grid h-5 min-w-5 w-fit place-items-center rounded-full px-1 text-[10.5px]", isToday ? "font-bold text-primary-foreground" : "text-foreground/70")}
-                    style={isToday ? { background: "hsl(var(--primary))" } : undefined}>{day}</span>
-                  <div className="mt-1 flex flex-col gap-1">
-                    {(events[day] ?? []).map((e, j) => (
-                      <span key={j} className="truncate rounded border px-1.5 py-0.5 text-[10px] leading-snug"
-                        style={{ background: tones[e.tone] + "1c", borderColor: tones[e.tone] + "55" }}>{e.t}</span>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // Instagram-иконка: в этой версии lucide бренд-иконок нет — аккуратный примитив
 function InstaIcon({ className }: { className?: string }) {

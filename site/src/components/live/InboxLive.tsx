@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Chat } from "@/lib/model";
 import { relTime, channelName } from "@/lib/model";
-import { useApp, A, recById, recTitle, entityCfg } from "@/lib/store";
+import { useApp, A, recById, recTitle, entityCfg, resolveRoute } from "@/lib/store";
+import { RouteHint } from "./RoutingLive";
 import { sendChatMessage } from "@/lib/integrations";
 import { fillTemplate } from "@/lib/fill";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,9 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
           <button onClick={goSettings} className="press inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11.5px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
             <Plug className="size-3" /> каналы
           </button>
+        </div>
+        <div className="border-b px-3.5 py-2">
+          <RouteHint source={chat?.channel ?? "tg"} onEdit={goSettings} />
         </div>
         {!anyReal && (
           <button onClick={goSettings} className="flex items-start gap-2 border-b px-3.5 py-2.5 text-left transition-colors hover:bg-foreground/[0.04]" style={{ background: "hsl(var(--brass) / 0.09)" }}>
@@ -104,16 +108,25 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
               </div>
             </div>
             <div className="ml-auto flex items-center gap-1.5">
-              {linked && (
-                <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12.5px]" onClick={() => A.openRecord(linked.id)}>
-                  {recTitle(linked.id)} <ArrowUpRight className="size-3.5" />
-                </Button>
-              )}
-              {(!linked || !entityCfg(linked.entityId).stages?.length) && (
-                <Button size="sm" className="h-8 gap-1.5 text-[12.5px]" onClick={() => A.chatCreateLead(chat.id)}>
-                  <UserPlus className="size-3.5" /> Создать сделку
-                </Button>
-              )}
+              {linked && (() => {
+                const le = entityCfg(linked.entityId);
+                const stg = le.stages?.find(x => x.id === linked.stageId);
+                return (
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12.5px]" onClick={() => A.openRecord(linked.id)}>
+                    {stg && <span className="size-1.5 rounded-full" style={{ background: stg.color }} />}
+                    {recTitle(linked.id)}{stg ? ` · ${stg.label}` : ""} <ArrowUpRight className="size-3.5" />
+                  </Button>
+                );
+              })()}
+              {(!linked || !entityCfg(linked.entityId).stages?.length) && (() => {
+                const { entity, stage } = resolveRoute(chat.channel);
+                return (
+                  <Button size="sm" className="h-8 gap-1.5 text-[12.5px]" title={entity ? `Упадёт в «${entity.namePlural}»${stage ? ", стадия " + stage.label : ""}` : "Маршрут не настроен"}
+                    onClick={() => A.chatCreateLead(chat.id)}>
+                    <UserPlus className="size-3.5" /> Создать {entity ? entity.name.toLowerCase() : "запись"}
+                  </Button>
+                );
+              })()}
             </div>
           </div>
 

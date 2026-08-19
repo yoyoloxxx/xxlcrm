@@ -2,8 +2,8 @@
 // «Пульт мира»: пользователь собирает структуру CRM сам, всё меняется вживую и синхронизируется команде.
 import { useState } from "react";
 import type { Field, FieldType } from "@/lib/model";
-import { FIELD_TYPES, PALETTE, uid } from "@/lib/model";
-import { useApp, A, allEntities, recordsOf } from "@/lib/store";
+import { FIELD_TYPES, PALETTE, SOURCES, sourceName, plural, uid } from "@/lib/model";
+import { useApp, A, allEntities, recordsOf, resolveRoute, routeOf } from "@/lib/store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,23 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { EntIcon, ICON_NAMES } from "./icons";
 import { cn } from "@/lib/utils";
+
+// Что сломается, если тронуть раздел: маршруты приёма и правила автоматизаций смотрят сюда по id
+function Dependencies({ entityId }: { entityId: string }) {
+  const s = useApp();
+  const routes = SOURCES.filter(src => resolveRoute(src).entity?.id === entityId && routeOf(src).auto);
+  const rules = s.automations.filter(r => r.trigger.entityId === entityId);
+  if (!routes.length && !rules.length) return null;
+  return (
+    <div className="mx-5 mb-1 mt-3 rounded-md border border-dashed px-3 py-2 text-[11.5px] leading-snug text-muted-foreground">
+      <b className="font-medium text-foreground">Сюда завязано:</b>{" "}
+      {routes.length > 0 && <>приём заявок из {routes.map(r => sourceName(r)).join(", ")}</>}
+      {routes.length > 0 && rules.length > 0 && " · "}
+      {rules.length > 0 && <>{rules.length} {plural(rules.length, "правило", "правила", "правил")} автоматизаций</>}
+      . Переименование безопасно; удаление стадии или раздела — подстрою и скажу что изменилось.
+    </div>
+  );
+}
 
 export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
   entityId: string; open: boolean; onOpenChange: (o: boolean) => void; onDeleted: () => void;
@@ -30,6 +47,7 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
             <EntIcon name={e.icon} className="size-4" style={{ color: "var(--brass-ink)" }} /> Раздел «{e.namePlural}»
           </DialogTitle>
         </DialogHeader>
+        <Dependencies entityId={e.id} />
         <Tabs defaultValue="fields" className="flex min-h-0 flex-1 flex-col">
           <TabsList className="mx-5 mt-3 grid w-fit grid-cols-3">
             <TabsTrigger value="fields">Поля</TabsTrigger>

@@ -3,8 +3,8 @@
 // подписывается на cloudHooks.save и превращает изменения стора в точечные upsert/delete.
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
-import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule } from "./model";
-import { uid, defaultRules } from "./model";
+import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
+import { uid, defaultRules, defaultRoutes } from "./model";
 import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { toast } from "sonner";
@@ -15,6 +15,13 @@ let channel: RealtimeChannel | null = null;
 // снимки последнего сохранённого состояния: id → канонический JSON модели (для диффа и гашения эха)
 let cfgSnap = ""; // канон структуры и правил (ws_config: entities + automations)
 let cfgHasAutomations = true; // колонка automations может ещё не существовать — деградируем мягко
+
+// В колонке ws_config.automations лежит либо старый массив правил, либо новый объект {rules, routes}:
+// маршруты приёма — общая настройка команды, но отдельная колонка потребовала бы миграции базы.
+type AutoCol = Rule[] | { rules?: Rule[]; routes?: Route[] } | null | undefined;
+const colRules = (raw: AutoCol): Rule[] | null => (Array.isArray(raw) ? raw : raw?.rules ?? null);
+const colRoutes = (raw: AutoCol): Route[] | null => (Array.isArray(raw) || !raw ? null : raw.routes ?? null);
+const autoCol = (rules: Rule[], routes: Route[]) => ({ rules, routes });
 const snap = {
   records: new Map<string, string>(),
   tasks: new Map<string, string>(),
@@ -140,10 +147,13 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   if (err) { toast.error("Не удалось загрузить пространство: " + err.message.slice(0, 100)); return; }
 
   const cfgEnts = (cfg.data?.entities as EntityCfg[] | null) ?? null;
-  const cfgAuto = ((cfg.data as Row | null)?.automations as Rule[] | null) ?? null;
+  const cfgAuto = ((cfg.data as Row | null)?.automations as AutoCol) ?? null;
+  const cfgRules = colRules(cfgAuto);
+  const cfgRoutes = colRoutes(cfgAuto);
   const data = {
     entities: cfgEnts?.length ? cfgEnts : clone(ENTITIES),
-    automations: cfgAuto ?? defaultRules(),
+    automations: cfgRules ?? defaultRules(),
+    routes: cfgRoutes ?? defaultRoutes(),
     records: (recs.data ?? []).map(M.records.fromRow),
     tasks: (tasks.data ?? []).map(M.tasks.fromRow),
     activities: (acts.data ?? []).map(M.activities.fromRow).sort((a, b) => a.ts - b.ts),
@@ -155,8 +165,8 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   enterCloud(data, { wsId: id, wsName: String(wss.data?.name ?? "Пространство"), inviteCode: String(wss.data?.invite_code ?? ""), users, meId });
 
   // снимки для диффа
-  cfgSnap = canon({ e: data.entities, a: data.automations });
-  if (!cfgEnts?.length || !cfgAuto) await saveCfg(id, data.entities, data.automations);
+  cfgSnap = canon({ e: data.entities, a: data.automations, r: data.routes });
+  if (!cfgEnts?.length || !cfgRules || !cfgRoutes) await saveCfg(id, data.entities, data.automations, data.routes);
   snap.records = new Map(data.records.map(r => [r.id, canon(r)]));
   snap.tasks = new Map(data.tasks.map(t => [t.id, canon(t)]));
   snap.activities = new Map(data.activities.map(a => [a.id, canon(a)]));
@@ -169,9 +179,9 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
 }
 
 // сохранить конфиг пространства; если колонки automations ещё нет в базе — сохраняем без неё
-async function saveCfg(id: string, entities: EntityCfg[], automations: Rule[]): Promise<void> {
+async function saveCfg(id: string, entities: EntityCfg[], automations: Rule[], routes: Route[]): Promise<void> {
   if (cfgHasAutomations) {
-    const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, automations, updated_at: Date.now() });
+    const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, automations: autoCol(automations, routes), updated_at: Date.now() });
     if (!error) return;
     if (/automations/i.test(error.message)) cfgHasAutomations = false; // колонка не создана — падаем на entities-only
     else throw new Error("ws_config: " + error.message);
@@ -192,9 +202,9 @@ async function doSave(): Promise<void> {
   saving = true;
   try {
     const st = getState();
-    const cfgJ = canon({ e: st.entities, a: st.automations });
+    const cfgJ = canon({ e: st.entities, a: st.automations, r: st.routes });
     if (cfgJ !== cfgSnap) {
-      await saveCfg(wsId, st.entities, st.automations);
+      await saveCfg(wsId, st.entities, st.automations, st.routes);
       cfgSnap = cfgJ;
     }
     const collections: { table: keyof typeof snap; items: { id: string }[]; toRow: (x: never) => Row }[] = [
@@ -245,12 +255,14 @@ function subscribeRealtime(id: string): void {
     const row = payload.new as Row | null;
     const incE = (row?.entities as EntityCfg[] | undefined) ?? undefined;
     if (!incE?.length) return;
-    const incA = (row?.automations as Rule[] | undefined) ?? getState().automations;
-    const j = canon({ e: incE, a: incA });
+    const rawA = row?.automations as AutoCol;
+    const incA = colRules(rawA) ?? getState().automations;
+    const incR = colRoutes(rawA) ?? getState().routes;
+    const j = canon({ e: incE, a: incA, r: incR });
     if (j === cfgSnap) return; // эхо
     cfgSnap = j;
-    applyRemote(s => { s.entities = incE; s.automations = incA; });
-    toast("Структура и правила обновлены коллегой");
+    applyRemote(s => { s.entities = incE; s.automations = incA; s.routes = incR; });
+    toast("Структура, правила и маршруты обновлены коллегой");
   });
   channel.subscribe();
 }

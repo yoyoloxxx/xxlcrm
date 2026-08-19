@@ -1,13 +1,14 @@
 // Живые автоматизации: правила «когда → тогда» для любых разделов конструктора
 import { useState } from "react";
 import type { Rule, RuleTrigger, TaskKind } from "@/lib/model";
-import { useApp, A, allEntities } from "@/lib/store";
+import { useApp, A, allEntities, ruleIssue, resolveRoute, userName } from "@/lib/store";
+import { SOURCES, sourceName } from "@/lib/model";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Pencil, Plus, Route as RouteIcon, Trash2, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<TaskKind, string> = { call: "звонок", meet: "встреча", todo: "сделать", msg: "написать" };
@@ -33,7 +34,7 @@ function actionText(r: Rule): string {
   const when = h === 0 ? "сразу" : h < 24 ? `через ${h} ч.` : `через ${Math.round(h / 24)} дн.`;
   return `задача «${r.action.title}» (${KIND_LABEL[r.action.kind]}, ${when})`;
 }
-const ruleBroken = (r: Rule) => !allEntities().some(e => e.id === r.trigger.entityId);
+const ruleBroken = (r: Rule) => ruleIssue(r);
 
 function RuleDialog({ rule, open, onClose }: { rule: Rule | null; open: boolean; onClose: () => void }) {
   const ents = allEntities();
@@ -154,7 +155,29 @@ export function AutomationsLive() {
         <Button size="sm" className="h-8 gap-1.5" onClick={() => setAdding(true)}><Plus className="size-3.5" /> Правило</Button>
       </div>
 
-      <div className="mt-5 divide-y rounded-lg border bg-card">
+      <div className="mt-5 rounded-lg border bg-card px-4 py-3.5">
+        <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+          <RouteIcon className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Приём заявок
+          <button onClick={() => A.goto("settings")} className="press ml-auto text-[11.5px] font-normal text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">настроить</button>
+        </div>
+        <p className="mt-1 text-[12px] leading-snug text-muted-foreground">Первое, что делает система сама: превращает входящее сообщение или заявку с сайта в запись.</p>
+        <div className="mt-2 flex flex-col gap-1">
+          {SOURCES.map(src => {
+            const { entity, stage, route, ownerId } = resolveRoute(src);
+            return (
+              <div key={src} className="flex items-center gap-2 text-[12px]">
+                <span className="w-[130px] shrink-0 text-muted-foreground">{sourceName(src)}</span>
+                <ArrowRight className="size-3 shrink-0 text-muted-foreground/60" />
+                {route.auto
+                  ? <span className="truncate"><b className="font-medium">{entity?.namePlural ?? "—"}</b>{stage ? ` · ${stage.label}` : ""}{ownerId ? ` · ${userName(ownerId)}` : ""}{route.createClient ? " · + карточка клиента" : ""}</span>
+                  : <span className="text-muted-foreground">только диалог во Входящих</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-3 divide-y rounded-lg border bg-card">
         {s.automations.length === 0 && (
           <div className="p-6 text-center text-[13px] text-muted-foreground">Правил нет — добавьте первое.</div>
         )}
@@ -168,7 +191,12 @@ export function AutomationsLive() {
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold leading-snug">{r.name}</div>
                 <div className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
-                  {broken ? "Раздел из правила удалён — правило не работает" : `${triggerText(r.trigger)} → ${actionText(r)}`}
+                  {broken ? (
+                    <span className="inline-flex items-center gap-1.5 text-destructive">
+                      <AlertTriangle className="size-3.5 shrink-0" /> Не работает: {broken}.
+                      <button onClick={() => setEditing(r)} className="press underline underline-offset-2">починить</button>
+                    </span>
+                  ) : `${triggerText(r.trigger)} → ${actionText(r)}`}
                 </div>
                 <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">сработало {r.fired} {r.fired % 10 === 1 && r.fired % 100 !== 11 ? "раз" : "раз(а)"}</div>
               </div>

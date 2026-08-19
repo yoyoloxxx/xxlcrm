@@ -4,12 +4,12 @@
 // — id полей и стадий стабильные строковые — переезд в Postgres сохранит данные как есть.
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule } from "./model";
-import { uid, now, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, PALETTE } from "./model";
+import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate, Integrations, User, EntityCfg, Stage, Rule, Route, InboundSource } from "./model";
+import { uid, now, plural, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, defaultRoutes, sourceName, OWNER_ROUND, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
 import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset } from "./presets";
 
-interface DataState { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
+interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
@@ -45,6 +45,8 @@ const persistence = {
       return {
         entities: Array.isArray(d.entities) && d.entities.length ? d.entities : clone(ENTITIES), // миграция v2→v3
         automations: Array.isArray(d.automations) ? d.automations : defaultRules(),
+        // маршруты приёма появились в v0.10: старый общий тумблер «автолид» становится полем auto у всех маршрутов
+        routes: Array.isArray(d.routes) && d.routes.length ? d.routes : defaultRoutes().map(r => ({ ...r, auto: ints.autoLead })),
         records: d.records, tasks: d.tasks ?? [], activities: d.activities ?? [],
         chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
         replyTemplates: Array.isArray(d.replyTemplates) && d.replyTemplates.length ? d.replyTemplates : DEFAULT_TEMPLATES,
@@ -55,7 +57,7 @@ const persistence = {
   save(s: DataState) {
     try {
       window.localStorage.setItem(LS_KEY, JSON.stringify({
-        v: 3, entities: s.entities, automations: s.automations, records: s.records, tasks: s.tasks, activities: s.activities,
+        v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
         chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
       }));
     } catch { /* памяти нет — живём в RAM */ }
@@ -97,7 +99,7 @@ export function ensureBdayField(entities: EntityCfg[]) {
     c.fields.push({ id: "bday", label: "День рождения", type: "date", inTable: false });
   }
 }
-const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), routes: defaultRoutes(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 ensurePos(initial.records);
@@ -190,6 +192,38 @@ export function relatedOf(recId: string): { records: Rec[]; chats: Chat[] } {
   return { records, chats };
 }
 
+// ---------- маршруты приёма: «откуда пришло → куда упало» ----------
+// Раздел-воронка и раздел-справочник вычисляются из текущей структуры, поэтому маршрут не ломается,
+// когда разделы переименованы, пересобраны пресетом или созданы с нуля в конструкторе.
+export const pipelineEntity = (): EntityCfg | undefined =>
+  st.entities.find(e => e.id === "deals" && e.stages?.length) ?? st.entities.find(e => e.stages?.length);
+export const clientEntity = (): EntityCfg | undefined =>
+  st.entities.find(e => e.id === "contacts") ?? st.entities.find(e => !e.stages?.length && e.fields.some(f => f.type === "phone"));
+export const routeOf = (source: InboundSource): Route =>
+  st.routes.find(r => r.source === source) ?? { source, auto: true, entityId: pipelineEntity()?.id ?? "", createClient: true };
+export interface ResolvedRoute { route: Route; entity?: EntityCfg; stage?: Stage; ownerId?: string }
+export function resolveRoute(source: InboundSource): ResolvedRoute {
+  const route = routeOf(source);
+  const entity = st.entities.find(e => e.id === route.entityId) ?? pipelineEntity() ?? st.entities[0];
+  const stage = entity?.stages?.find(x => x.id === route.stageId) ?? entity?.stages?.[0];
+  return { route, entity, stage, ownerId: pickRouteOwner(route, entity?.id) };
+}
+// «по очереди» = тому, у кого сейчас меньше активных записей в этом разделе: детерминированно, без счётчика в базе
+function pickRouteOwner(route: Route, entityId?: string): string | undefined {
+  if (!route.ownerId) return undefined;                                   // «кто принял» — останется текущий пользователь
+  if (route.ownerId !== OWNER_ROUND) return st.users.some(u => u.id === route.ownerId) ? route.ownerId : undefined;
+  const load = (userId: string) => st.records.filter(r => r.entityId === entityId && r.ownerId === userId
+    && (entityCfg(r.entityId).stages?.find(x => x.id === r.stageId)?.kind ?? "open") === "open").length;
+  return [...st.users].sort((a, b) => load(a.id) - load(b.id) || a.id.localeCompare(b.id))[0]?.id;
+}
+// короткая подпись «куда упадёт» — для настроек, Входящих и подсказок на кнопках
+export function routeSummary(source: InboundSource): string {
+  const { entity, stage, route } = resolveRoute(source);
+  if (!route.auto) return "только диалог, заявку создаёте вы";
+  if (!entity) return "раздел не выбран";
+  return `${entity.name} · ${stage?.label ?? "без стадии"}`;
+}
+
 export function recTitle(id?: string): string {
   const r = recById(id ?? undefined); if (!r) return "";
   const e = entityCfg(r.entityId);
@@ -200,6 +234,42 @@ export function recTitle(id?: string): string {
   return `${e.name} №${r.num}`;
 }
 export const dispCtx = () => ({ recTitle, userName });
+
+// ---------- целостность структуры ----------
+// Разделы и стадии живут в конструкторе, а ссылаются на них маршруты приёма и правила автоматизаций.
+// Удалили стадию — маршрут не должен молча слать заявки «в никуда», а правило молча не срабатывать.
+export function ruleIssue(r: Rule): string | null {
+  const t = r.trigger;
+  const e = st.entities.find(x => x.id === t.entityId);
+  if (!e) return "раздел удалён";
+  if (t.type === "stage_enter" && !t.stageId.startsWith("kind:") && !e.stages?.some(x => x.id === t.stageId)) return "стадия удалена";
+  if ((t.type === "stage_enter" || t.type === "stage_stuck") && !e.stages?.length) return "в разделе выключена воронка";
+  return null;
+}
+function repairStructure(s: State): string[] {
+  const notes: string[] = [];
+  const fallback = s.entities.find(e => e.id === "deals" && e.stages?.length) ?? s.entities.find(e => e.stages?.length) ?? s.entities[0];
+  for (const r of s.routes) {
+    const e = s.entities.find(x => x.id === r.entityId);
+    if (!e) {
+      if (!fallback) continue;
+      r.entityId = fallback.id; r.stageId = undefined;
+      notes.push(`${sourceName(r.source)} → «${fallback.namePlural}»`);
+    } else if (r.stageId && !e.stages?.some(x => x.id === r.stageId)) {
+      r.stageId = undefined;
+      notes.push(`${sourceName(r.source)} → первая стадия «${e.namePlural}»`);
+    }
+    if (r.ownerId && r.ownerId !== OWNER_ROUND && !s.users.some(u => u.id === r.ownerId)) r.ownerId = undefined;
+  }
+  let off = 0;
+  for (const rule of s.automations) if (rule.enabled && ruleIssue(rule)) { rule.enabled = false; off++; }
+  if (off) notes.push(`${off} ${plural(off, "правило выключено", "правила выключены", "правил выключено")} — ссылались на удалённое`);
+  return notes;
+}
+function repairAndTell(s: State) {
+  const notes = repairStructure(s);
+  if (notes.length) queueMicrotask(() => toast("Настройки подстроены под новую структуру", { description: notes.join(" · ") }));
+}
 
 function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string, editKey?: string) {
   st.activities.push({ id: uid("a"), recordId, ts: now(), kind, text, userId, editKey });
@@ -269,7 +339,7 @@ export const A = {
       }
     });
   },
-  createRecord(entityId: string, values: Record<string, unknown> = {}, stageId?: string): string {
+  createRecord(entityId: string, values: Record<string, unknown> = {}, stageId?: string, ownerId?: string): string {
     let id = "";
     mut(s => {
       const e = entityCfg(entityId);
@@ -277,7 +347,7 @@ export const A = {
       const col = s.records.filter(x => x.entityId === entityId && x.stageId === stgId);
       const r: Rec = {
         id: uid("r"), entityId, num: s.records.filter(x => x.entityId === entityId).length + 1,
-        values, ownerId: s.currentUserId, createdAt: now(), updatedAt: now(),
+        values, ownerId: ownerId ?? s.currentUserId, createdAt: now(), updatedAt: now(),
         stageId: stgId, stageAt: now(),
         pos: Math.max(0, ...col.map(x => x.pos ?? 0)) + 1000, // новые — в конец колонки
       };
@@ -336,7 +406,7 @@ export const A = {
     persistence.reset();
     const fresh = seed();
     ensurePos(fresh.records);
-    mut(s => { Object.assign(s, fresh, { replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() }); s.drawerRecordId = null; s.activeChatId = null; });
+    mut(s => { Object.assign(s, fresh, { replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations(), routes: defaultRoutes() }); s.drawerRecordId = null; s.activeChatId = null; });
     toast("Демо-данные сброшены к исходным");
   },
 
@@ -403,18 +473,30 @@ export const A = {
       else if (added && s.activeChatId !== c.id) c.unread += added;
     });
   },
+  // Создать заявку из диалога ПО МАРШРУТУ канала: раздел, стадия, ответственный и карточка клиента —
+  // всё из настройки «Куда падают заявки», а не из зашитого «deals».
   chatCreateLead(chatId: string): string | null {
     const c = st.chats.find(x => x.id === chatId);
     if (!c) return null;
-    const e = entityCfg("deals");
+    const { entity: e, stage, ownerId, route } = resolveRoute(c.channel);
+    if (!e) { toast.error("Некуда положить заявку", { description: "Создайте раздел с воронкой или настройте маршрут" }); return null; }
     // дедуп: известный клиент? (диалог уже привязан к карточке-человеку или совпал телефон)
     const linkedRec = c.recordId ? recById(c.recordId) : undefined;
-    const person = (linkedRec && !entityCfg(linkedRec.entityId).stages?.length ? linkedRec : undefined) ?? findRecordByPhone(c.phone);
+    let person = (linkedRec && !entityCfg(linkedRec.entityId).stages?.length ? linkedRec : undefined) ?? findRecordByPhone(c.phone);
+    // маршрут просит завести карточку клиента — заводим до сделки, чтобы сразу связать
+    const cl = clientEntity();
+    if (!person && route.createClient && cl && cl.id !== e.id) {
+      const cv: Record<string, unknown> = { [cl.titleFieldId]: niceContactName(c.name, c.channel, c.phone) };
+      const pf = cl.fields.find(f => f.type === "phone"); if (pf && c.phone) cv[pf.id] = c.phone;
+      const sOpt = sourceOption(cl, c.channel); if (sOpt) cv[sOpt.fieldId] = sOpt.optionId;
+      person = recById(A.createRecord(cl.id, cv, undefined, ownerId));
+      if (person) mut(s => { const cc = s.chats.find(x => x.id === chatId)!; cc.recordId = cc.recordId ?? person!.id; });
+    }
     const contactF = e.fields.find(f => f.type === "relation" && person && f.relationTo === person.entityId);
     if (person) {
       const openDeal = st.records.find(r =>
-        r.entityId === "deals" &&
-        e.fields.some(f => f.type === "relation" && r.values[f.id] === person.id) &&
+        r.entityId === e.id &&
+        e.fields.some(f => f.type === "relation" && r.values[f.id] === person!.id) &&
         e.stages?.find(x => x.id === r.stageId)?.kind === "open");
       if (openDeal) {
         mut(s => {
@@ -426,25 +508,31 @@ export const A = {
         return openDeal.id;
       }
     }
-    const values: Record<string, unknown> = { title: person ? recTitle(person.id) : niceContactName(c.name, c.channel, c.phone) };
+    const values: Record<string, unknown> = { [e.titleFieldId]: person ? recTitle(person.id) : niceContactName(c.name, c.channel, c.phone) };
     if (person && contactF) values[contactF.id] = person.id;
-    const srcField = e.fields.find(f => f.id === "source");
-    const want = c.channel === "wa" ? /whatsapp/i : c.channel === "tg" ? /telegram/i : c.channel === "max" ? /max/i : /instagram|сайт/i;
-    const srcOpt = srcField?.options?.find(o => want.test(o.label)) ?? srcField?.options?.find(o => /сайт/i.test(o.label));
-    if (srcField && srcOpt) values[srcField.id] = srcOpt.id;
-    const id = A.createRecord("deals", values);
+    const sOpt = sourceOption(e, c.channel); if (sOpt) values[sOpt.fieldId] = sOpt.optionId;
+    const id = A.createRecord(e.id, values, stage?.id, ownerId);
     mut(s => {
       const cc = s.chats.find(x => x.id === chatId)!;
       cc.recordId = id;
-      pushAct(id, "comment", `Сделка создана из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}${person ? ` · клиент: ${recTitle(person.id)}` : ""}`);
+      pushAct(id, "comment", `${e.name} создан(а) из диалога в ${channelName(c.channel)}${c.phone ? ` · ${c.phone}` : ""}${person ? ` · клиент: ${recTitle(person.id)}` : ""}`);
     });
-    toast.success(person ? "Сделка создана и привязана к клиенту" : "Сделка создана и связана с диалогом");
+    toast.success(`${e.name} → ${stage?.label ?? e.namePlural}`, {
+      description: person ? `Клиент: ${recTitle(person.id)}${ownerId ? " · " + userName(ownerId) : ""}` : `Из ${channelName(c.channel)}${ownerId ? " · " + userName(ownerId) : ""}`,
+    });
     return id;
   },
 
   // ---------- интеграции и шаблоны ----------
   intPatch(fn: (i: Integrations) => void) { mut(s => fn(s.integrations)); },
-  setAutoLead(v: boolean) { mut(s => { s.integrations.autoLead = v; }); },
+  // маршрут приёма: «заявки из этого канала падают туда-то»
+  routeUpdate(source: InboundSource, patch: Partial<Route>) {
+    mut(s => {
+      const i = s.routes.findIndex(r => r.source === source);
+      if (i === -1) s.routes.push({ ...routeOf(source), ...patch, source });
+      else s.routes[i] = { ...s.routes[i], ...patch, source };
+    });
+  },
   tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
   tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
   tplDelete(id: string) { mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); },
@@ -498,6 +586,7 @@ export const A = {
       s.chats = data.chats;
       s.drawerRecordId = null;
       s.activeChatId = null;
+      repairStructure(s); // маршруты приёма переезжают на разделы нового шаблона
     });
     const desc = p.custom ? "Разделы и автоматизации применены — можно отменить (Ctrl+Z)" : "Разделы, воронка, автоматизации и примеры настроены — можно отменить (Ctrl+Z)";
     toast.success(`Шаблон «${p.label}» применён`, { description: desc });
@@ -522,6 +611,7 @@ export const A = {
         e.stages = undefined;
         s.records.forEach(r => { if (r.entityId === id) r.stageId = undefined; });
       }
+      repairAndTell(s);
     });
   },
   entDelete(id: string): boolean {
@@ -537,6 +627,7 @@ export const A = {
       s.chats.forEach(c => { if (c.recordId && ids.has(c.recordId)) c.recordId = undefined; });
       if (s.drawerRecordId && ids.has(s.drawerRecordId)) s.drawerRecordId = null;
       s.entities = s.entities.filter(e => e.id !== id);
+      repairAndTell(s);
     });
     toast("Раздел удалён вместе с записями", { description: "Ctrl+Z вернёт" });
     return true;
@@ -580,6 +671,7 @@ export const A = {
       en.stages = en.stages!.filter(x => x.id !== stageId);
       const first = en.stages[0];
       s.records.forEach(r => { if (r.entityId === entityId && r.stageId === stageId) { r.stageId = first.id; r.stageAt = now(); } });
+      repairAndTell(s); // маршруты и правила, смотревшие на эту стадию, чиним сразу
     });
   },
   stageMove(entityId: string, stageId: string, dir: -1 | 1) {
@@ -598,44 +690,54 @@ export const A = {
     const email = findVal(["mail", "почта"]);
     const bdayRaw = findVal(["birth", "bday", "рожден", "др "]);
     const bdayTs = parseRuDate(bdayRaw);
-    // клиент: ищем контакт по телефону, иначе создаём — сюда ляжет и дата рождения (для поздравлений)
+    const { entity: dealsCfg, stage, ownerId, route } = resolveRoute("tilda");
+    if (!dealsCfg) { toast.error("Заявка с сайта пришла, но раздел не настроен"); return; }
+    const raw = Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ");
+    // клиент: ищем карточку по телефону, иначе создаём — сюда ляжет и дата рождения (для поздравлений)
     let contactId: string | undefined;
-    const contactsCfg = st.entities.find(e => e.id === "contacts");
-    if (contactsCfg && (name || phone)) {
+    const contactsCfg = clientEntity();
+    if (contactsCfg && route.createClient && (name || phone)) {
       const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
       const phoneF = contactsCfg.fields.find(f => f.type === "phone");
-      const existing = phone && phoneF ? st.records.find(r => r.entityId === "contacts" && digits(r.values[phoneF.id]) === digits(phone)) : undefined;
+      const existing = phone && phoneF ? st.records.find(r => r.entityId === contactsCfg.id && digits(r.values[phoneF.id]) === digits(phone)) : undefined;
       if (existing) {
         contactId = existing.id;
         if (bdayTs) mut(s => { const r = s.records.find(x => x.id === contactId)!; r.values["bday"] = bdayTs; r.updatedAt = now(); });
       } else {
-        const values: Record<string, unknown> = { [contactsCfg.titleFieldId]: name || phone || "Клиент с Tilda" };
+        const values: Record<string, unknown> = { [contactsCfg.titleFieldId]: name || phone || "Клиент с сайта" };
         if (phoneF && phone) values[phoneF.id] = phone;
         const emailF = contactsCfg.fields.find(f => f.type === "email");
         if (emailF && email) values[emailF.id] = email;
         if (bdayTs) values["bday"] = bdayTs;
-        contactId = A.createRecord("contacts", values);
+        const sOpt = sourceOption(contactsCfg, "tilda"); if (sOpt) values[sOpt.fieldId] = sOpt.optionId;
+        contactId = A.createRecord(contactsCfg.id, values, undefined, ownerId);
       }
     }
-    const dealsCfg = entityCfg("deals");
-    // дедуп: у клиента уже есть открытая сделка → заявка прикрепляется к ней
+    // маршрут выключен: заявка не создаётся, но след остаётся у клиента
+    if (!route.auto) {
+      if (contactId) mut(() => pushAct(contactId!, "comment", `Заявка с сайта: ${raw}`));
+      toast("Заявка с сайта принята", { description: contactId ? "Записал клиенту — заявку создайте вручную" : "Автосоздание для сайта выключено" });
+      return;
+    }
+    // дедуп: у клиента уже есть открытая заявка → новая прикрепляется к ней
     if (contactId) {
       const openDeal = st.records.find(r =>
-        r.entityId === "deals" &&
+        r.entityId === dealsCfg.id &&
         dealsCfg.fields.some(f => f.type === "relation" && r.values[f.id] === contactId) &&
         dealsCfg.stages?.find(x => x.id === r.stageId)?.kind === "open");
       if (openDeal) {
-        mut(() => pushAct(openDeal.id, "comment", `Повторная заявка с Tilda: ${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ")}`));
-        toast.success("Повторная заявка — приложена к текущей сделке клиента", { description: recTitle(openDeal.id) });
+        mut(() => pushAct(openDeal.id, "comment", `Повторная заявка с сайта: ${raw}`));
+        toast.success("Повторная заявка — приложена к текущей", { description: recTitle(openDeal.id) });
         return;
       }
     }
-    const dealValues: Record<string, unknown> = { title: name || "Заявка с Tilda", source: dealsCfg.fields.find(f => f.id === "source")?.options?.find(o => /сайт/i.test(o.label))?.id };
-    const contactF = dealsCfg.fields.find(f => f.type === "relation" && f.relationTo === "contacts");
+    const dealValues: Record<string, unknown> = { [dealsCfg.titleFieldId]: name || "Заявка с сайта" };
+    const sOptD = sourceOption(dealsCfg, "tilda"); if (sOptD) dealValues[sOptD.fieldId] = sOptD.optionId;
+    const contactF = dealsCfg.fields.find(f => f.type === "relation" && contactId && f.relationTo === contactsCfg?.id);
     if (contactF && contactId) dealValues[contactF.id] = contactId;
-    const id = A.createRecord("deals", dealValues);
-    mut(() => pushAct(id, "comment", `Заявка с Tilda: ${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ")}`));
-    toast.success("Заявка с Tilda упала в воронку", { description: [name || phone, bdayTs ? "ДР сохранён" : ""].filter(Boolean).join(" · ") });
+    const id = A.createRecord(dealsCfg.id, dealValues, stage?.id, ownerId);
+    mut(() => pushAct(id, "comment", `Заявка с сайта: ${raw}`));
+    toast.success(`Заявка с сайта → ${dealsCfg.name} · ${stage?.label ?? ""}`, { description: [name || phone, bdayTs ? "ДР сохранён" : "", ownerId ? userName(ownerId) : ""].filter(Boolean).join(" · ") });
   },
 };
 
@@ -684,6 +786,16 @@ export function niceContactName(name: string | undefined, channel: Channel, phon
   return (phone && phone.trim()) || `Клиент из ${channelName(channel)}`;
 }
 
+// поле «Источник / Канал» раздела и опция под конкретный канал — заявка сразу знает, откуда пришла
+export function sourceOption(e: EntityCfg, source: InboundSource): { fieldId: string; optionId: string } | undefined {
+  const f = e.fields.find(x => x.type === "select" && (x.id === "source" || /источник|канал/i.test(x.label)));
+  if (!f?.options?.length) return undefined;
+  const want = source === "wa" ? /whatsapp|ватс/i : source === "tg" ? /telegram|телеграм/i : source === "max" ? /max|макс/i
+    : source === "ig" ? /instagram|инстаг/i : /сайт|tilda|тильда|форма/i;
+  const o = f.options.find(x => want.test(x.label));
+  return o ? { fieldId: f.id, optionId: o.id } : undefined;
+}
+
 // совпадение внешних id двух диалогов (каналы не смешиваются)
 function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
   return (b.tg !== undefined && a.tg === b.tg) || (b.wa !== undefined && a.wa === b.wa)
@@ -695,21 +807,19 @@ export function handleIncoming(ext: ChatExt, name: string, channel: Channel, tex
   const found = st.chats.find(c => c.ext && chatExtMatch(c.ext, ext));
   if (found) { A.chatIncoming(found.id, text); return; }
   const id = A.chatIncomingExt(ext, name, channel, text, phone);
-  if (st.integrations.autoLead) {
-    const lead = A.chatCreateLead(id);
-    if (lead) toast.success("Автолид: диалог превращён в сделку", { description: recTitle(lead) });
-  }
+  if (routeOf(channel).auto) A.chatCreateLead(id); // маршрут канала решает: сразу заявка или только диалог
 }
 
 // ---------- мост в облако (использует cloud.ts) ----------
 export function enterCloud(
-  data: { entities: EntityCfg[]; automations: Rule[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
+  data: { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[] },
   ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
 ) {
   Object.assign(st, data);
   ensureBdayField(st.entities);
   ensurePos(st.records);
   st.users = ctx.users; st.currentUserId = ctx.meId;
+  repairStructure(st); // конфиг из облака мог разойтись со структурой — чиним молча при входе
   st.mode = "cloud"; st.wsId = ctx.wsId; st.wsName = ctx.wsName; st.inviteCode = ctx.inviteCode;
   st.drawerRecordId = null; st.activeChatId = null; st.authStage = null;
   history.length = 0;

@@ -52,6 +52,23 @@ export const defaultIntegrations = (): Integrations => ({
 });
 export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : "Instagram");
 
+// ---------- маршруты приёма: «откуда пришло → куда упало» ----------
+// Отвечает на вопрос «куда падают заявки»: у каждого источника свой раздел, стадия и ответственный.
+export type InboundSource = Channel | "tilda";
+export const SOURCES: InboundSource[] = ["tg", "wa", "max", "ig", "tilda"];
+export const sourceName = (s: InboundSource) => (s === "tilda" ? "Сайт (форма Tilda)" : channelName(s));
+export const OWNER_ROUND = "auto"; // «по очереди» — тому, у кого меньше активных
+export interface Route {
+  source: InboundSource;
+  auto: boolean;            // создавать заявку сразу (иначе диалог просто ложится во Входящие)
+  entityId: string;         // в какой раздел
+  stageId?: string;         // в какую стадию (пусто = первая)
+  ownerId?: string;         // пусто = кто принял; OWNER_ROUND = по очереди; иначе id сотрудника
+  createClient: boolean;    // заводить карточку клиента в разделе-справочнике
+}
+export const defaultRoutes = (): Route[] =>
+  SOURCES.map(s => ({ source: s, auto: true, entityId: "deals", createClient: true }));
+
 // ---------- конструктор разделов ----------
 export const FIELD_TYPES: { type: FieldType; label: string; group: string }[] = [
   { type: "text", label: "Текст", group: "База" },

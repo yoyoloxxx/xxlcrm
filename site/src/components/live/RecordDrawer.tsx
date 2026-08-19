@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
 import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, entityCfg as entCfg } from "@/lib/store";
+import { sendChatMessage } from "@/lib/integrations";
+import { fillTemplate } from "@/lib/fill";
+import { channelName } from "@/lib/model";
 import { FieldInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
@@ -10,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { CalendarClock, ListChecks, MessageSquare, MoreVertical, Phone, Plus, Trash2, X } from "lucide-react";
+import { ArrowUpRight, CalendarClock, ListChecks, MessageSquare, MoreVertical, Phone, Plus, Send, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TASK_ICON: Record<TaskKind, React.ElementType> = { call: Phone, meet: CalendarClock, todo: ListChecks, msg: MessageSquare };
@@ -141,6 +144,8 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
             </div>
           </section>
 
+          <ChatBlock recId={r.id} />
+
           <RelatedBlock recId={r.id} />
 
           <section className="border-t px-4 py-3.5">
@@ -173,7 +178,9 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
 
 // Связанное: вся история клиента в одном месте — записи, ссылающиеся сюда, и его диалоги
 function RelatedBlock({ recId }: { recId: string }) {
-  const { records, chats } = relatedOf(recId);
+  const { records, chats: all } = relatedOf(recId);
+  const primary = primaryChat(recId);
+  const chats = all.filter(c => c.id !== primary?.id);
   if (!records.length && !chats.length) return null;
   return (
     <section className="border-t px-4 py-3.5">
@@ -204,6 +211,59 @@ function RelatedBlock({ recId }: { recId: string }) {
           </button>
         ))}
       </div>
+    </section>
+  );
+}
+
+// Главный диалог записи: привязанный напрямую, иначе самый свежий из связанных
+function primaryChat(recId: string) {
+  const { chats } = relatedOf(recId);
+  const ts = (c: { msgs: { ts: number }[] }) => c.msgs[c.msgs.length - 1]?.ts ?? 0;
+  return chats.find(c => c.recordId === recId) ?? [...chats].sort((a, b) => ts(b) - ts(a))[0];
+}
+
+// Переписка прямо в карточке: ответить клиенту, не уходя во Входящие — разделы перестают жить отдельно
+function ChatBlock({ recId }: { recId: string }) {
+  const chat = primaryChat(recId);
+  const [draft, setDraft] = useState("");
+  if (!chat) return null;
+  const msgs = chat.msgs.slice(-6);
+  const send = () => { if (!draft.trim()) return; sendChatMessage(chat.id, draft.trim()); setDraft(""); };
+  return (
+    <section className="border-t px-4 py-3.5">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="eyebrow">Переписка · {channelName(chat.channel)}</span>
+        {chat.ext && <span title="Настоящий диалог — ответ уйдёт клиенту" className="size-1.5 rounded-full" style={{ background: "#6E8B4F" }} />}
+        <button onClick={() => { A.openChat(chat.id); A.goto("inbox"); A.openRecord(null); }}
+          className="press ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+          весь диалог <ArrowUpRight className="size-3" />
+        </button>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {msgs.map(m => (
+          <div key={m.id} className={cn("flex", m.out ? "justify-end" : "justify-start")}>
+            <div className={cn("max-w-[85%] rounded-lg px-2.5 py-1.5 text-[12.5px] leading-snug", m.out ? "rounded-br-[3px] text-primary-foreground" : "rounded-bl-[3px] border bg-background")}
+              style={m.out ? { background: "hsl(var(--primary))" } : undefined}>
+              {m.text}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-1.5">
+        <Input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
+          placeholder={chat.ext ? "Ответить клиенту…" : "Ответить (демо-диалог)…"} className="h-9 text-[12.5px]" />
+        <Button size="sm" className="h-9 w-9 p-0" disabled={!draft.trim()} onClick={send}><Send className="size-3.5" /></Button>
+      </div>
+      {getState().replyTemplates.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {getState().replyTemplates.slice(0, 4).map(t => (
+            <button key={t.id} onClick={() => setDraft(fillTemplate(t.text, chat))}
+              className="press h-6 rounded-full border px-2 text-[10.5px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

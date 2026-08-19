@@ -6,7 +6,6 @@ import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from 
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
@@ -201,13 +200,9 @@ export function IntegrationsLive() {
         )}
       </div>
 
-      <label className="mt-2.5 flex cursor-pointer items-center justify-between rounded-md border p-3">
-        <span>
-          <span className="block text-[12.5px] font-medium">Автолид из новых диалогов</span>
-          <span className="block text-[11px] text-muted-foreground">Новый собеседник сразу создаёт сделку в воронке</span>
-        </span>
-        <Switch checked={ints.autoLead} onCheckedChange={v => A.setAutoLead(v)} />
-      </label>
+      <p className="mt-2.5 rounded-md border border-dashed px-3 py-2 text-[11.5px] leading-snug text-muted-foreground">
+        Что происходит с входящими — ниже, в блоке «Куда падают заявки»: раздел, стадия и ответственный настраиваются отдельно для каждого канала.
+      </p>
     </div>
   );
 }
