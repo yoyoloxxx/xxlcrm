@@ -454,6 +454,10 @@ export const A = {
     mut(s => {
       s.records = s.records.filter(r => r.id !== recId);
       s.tasks = s.tasks.filter(t => t.recordId !== recId);
+      // диалог не должен ссылаться на удалённую запись: иначе следующее сообщение клиента
+      // будет считаться продолжением несуществующей заявки и новая не создастся
+      s.chats.forEach(c => { if (c.recordId === recId) c.recordId = undefined; });
+      s.activities = s.activities.filter(a => a.recordId !== recId);
       if (s.drawerRecordId === recId) s.drawerRecordId = null;
     });
     toast("Запись удалена — Ctrl+Z, чтобы вернуть");
@@ -899,7 +903,15 @@ function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
 // общий приём входящего из ЛЮБОГО реального канала: найти диалог по внешнему id либо создать (+автолид)
 export function handleIncoming(ext: ChatExt, name: string, channel: Channel, text: string, phone?: string) {
   const found = st.chats.find(c => c.ext && chatExtMatch(c.ext, ext));
-  if (found) { A.chatIncoming(found.id, text); return; }
+  if (found) {
+    A.chatIncoming(found.id, text);
+    // старый диалог, но заявки за ним больше нет (удалили) или она уже закрыта — это новое обращение
+    const rec = recById(found.recordId);
+    const stages = rec ? entityCfg(rec.entityId).stages : undefined;
+    const live = !!rec && !!stages?.length && stages.find(x => x.id === rec!.stageId)?.kind === "open";
+    if (!live && routeOf(channel).auto) A.chatCreateLead(found.id);
+    return;
+  }
   const id = A.chatIncomingExt(ext, name, channel, text, phone);
   if (routeOf(channel).auto) A.chatCreateLead(id); // маршрут канала решает: сразу заявка или только диалог
 }

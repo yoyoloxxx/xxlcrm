@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.13"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.14"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 const json = (body: Any, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const uid = (p: string) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -145,21 +145,25 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   const message = { id: uid("m"), ts: nowMs, out: false, text: msg.text };
 
   // 1) диалог: старый — дописываем, нового — заводим
-  let chat: Any | null = null;
+  let chat: Any | null = null;      // новый диалог: вставим в конце
+  let existing: Any | null = null;  // уже существующий: только допишем сообщение
   if (src !== "tilda") {
     const extKey = Object.keys(msg.ext)[0];
     const extVal = msg.ext[extKey];
     const { data: chats } = await db.from("chats").select("*").eq("workspace_id", ws).eq("channel", src);
-    chat = (chats ?? []).find((c: Any) => c.ext && String(c.ext[extKey]) === String(extVal)) ?? null;
-    if (chat) {
-      const msgs = [...((chat.msgs as Any[]) ?? []), message].slice(-500);
-      await db.from("chats").update({ msgs, unread: (chat.unread ?? 0) + 1, updated_at: nowMs }).eq("id", chat.id);
-      return; // существующий диалог — заявку повторно не создаём
+    existing = (chats ?? []).find((c: Any) => c.ext && String(c.ext[extKey]) === String(extVal)) ?? null;
+    if (existing) {
+      const msgs = [...((existing.msgs as Any[]) ?? []), message].slice(-500);
+      await db.from("chats").update({ msgs, unread: (existing.unread ?? 0) + 1, updated_at: nowMs }).eq("id", existing.id);
+      // Продолжение живой заявки — новую не создаём. Но если запись удалили или она уже закрыта,
+      // человек пишет по новому поводу: это новая заявка, иначе сообщение потеряется в старом диалоге.
+      if (await liveRecord(ws, existing.record_id, entities)) return;
+    } else {
+      chat = {
+        id: uid("c"), workspace_id: ws, name: msg.name || msg.phone || "Клиент", phone: msg.phone ?? null,
+        channel: src, record_id: null, unread: 1, ext: msg.ext, msgs: [message], updated_at: nowMs,
+      };
     }
-    chat = {
-      id: uid("c"), workspace_id: ws, name: msg.name || msg.phone || "Клиент", phone: msg.phone ?? null,
-      channel: src, record_id: null, unread: 1, ext: msg.ext, msgs: [message], updated_at: nowMs,
-    };
   }
 
   if (!route.auto || !entity) {
@@ -197,7 +201,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     const openOne = relF ? (open ?? []).find((r: Any) =>
       r.values?.[relF.id] === clientId && entity.stages?.find((s: Any) => s.id === r.stage_id)?.kind === "open") : undefined;
     if (openOne) {
-      if (chat) { chat.record_id = openOne.id; await db.from("chats").insert(chat); }
+      await attachChat(chat, existing, openOne.id);
       await db.from("activities").insert({
         id: uid("a"), workspace_id: ws, record_id: openOne.id, ts: nowMs, kind: "comment",
         text: `Клиент снова написал (${srcName(src)}) — диалог привязан к текущей записи`, user_id: null,
@@ -222,7 +226,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs, kind: "created", text: "Запись создана", user_id: null },
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs + 1, kind: "comment", text: `Пришло с сервера: ${srcName(src)}${msg.phone ? " · " + msg.phone : ""}`, user_id: null },
   ]);
-  if (chat) { chat.record_id = recId; await db.from("chats").insert(chat); }
+  await attachChat(chat, existing, recId);
 
   // и сразу пишем владельцу в Telegram — заявка не должна ждать, пока кто-то откроет CRM
   const ownerName = (members ?? []).find((m: Any) => m.user_id === ownerId)?.name ?? "";
@@ -234,6 +238,23 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     "",
     msg.text.slice(0, 300),
   ].filter(x => x !== "").join("\n"));
+}
+
+// Жива ли запись, к которой привязан диалог: существует и ещё не закрыта
+async function liveRecord(ws: string, recordId: string | null, entities: Any[]): Promise<boolean> {
+  if (!recordId) return false;
+  const { data } = await db.from("records").select("id, entity_id, stage_id").eq("workspace_id", ws).eq("id", recordId).maybeSingle();
+  if (!data) return false;                                  // запись удалили — диалог висит в пустоту
+  const e = entities.find(x => x.id === data.entity_id);
+  const stages: Any[] = e?.stages ?? [];
+  if (!stages.length) return false;                         // карточка клиента, а не заявка — повод завести заявку
+  return stages.find((s: Any) => s.id === data.stage_id)?.kind === "open";
+}
+
+// привязать диалог к записи: новый диалог вставляем, существующий — перепривязываем
+async function attachChat(fresh: Any | null, existing: Any | null, recordId: string): Promise<void> {
+  if (fresh) { fresh.record_id = recordId; await db.from("chats").insert(fresh); }
+  else if (existing) await db.from("chats").update({ record_id: recordId }).eq("id", existing.id);
 }
 
 async function nextNum(ws: string, entityId: string): Promise<number> {
