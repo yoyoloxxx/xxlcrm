@@ -13,9 +13,11 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.14"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.15"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
-const json = (body: Any, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+// CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
+const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
+const json = (body: Any, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS } });
 const uid = (p: string) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
 
@@ -275,7 +277,7 @@ const srcName = (s: string) => (s === "tg" ? "Telegram" : s === "wa" ? "WhatsApp
 
 // ---------- точка входа ----------
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*" } });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const url = new URL(req.url);
   const ws = url.searchParams.get("ws") ?? "";
   // проба: «какая версия функции стоит и какие источники понимает»

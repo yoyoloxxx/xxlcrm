@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Заявка → XXLcrm</title>
+<style>
+  :root { --ink:#2b2822; --soft:#8a8578; --brass:#bc9f5c; --brass-ink:#8a6a28; --line:#e4dfd4; --bg:#faf7f1; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+         background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  .card { width:100%; max-width:430px; background:#fff; border:1px solid var(--line); border-radius:14px;
+          padding:26px 24px; box-shadow:0 20px 50px -30px rgba(0,0,0,.4); }
+  h1 { margin:0 0 4px; font-size:20px; letter-spacing:-.01em; }
+  p.sub { margin:0 0 18px; color:var(--soft); font-size:13px; }
+  label { display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--soft); margin:14px 0 5px; }
+  input, textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; background:#fff; color:inherit; }
+  input:focus, textarea:focus { outline:none; border-color:var(--brass); }
+  textarea { resize:vertical; min-height:78px; }
+  button { margin-top:18px; width:100%; padding:12px; border:0; border-radius:8px; background:var(--brass-ink); color:#fff;
+           font:600 15px/1 inherit; cursor:pointer; transition:opacity .15s; }
+  button:hover { opacity:.9; } button:disabled { opacity:.5; cursor:default; }
+  .note { margin-top:14px; font-size:11.5px; color:var(--soft); line-height:1.45; }
+  .note code { font-size:10.5px; word-break:break-all; }
+  .ok { margin-top:14px; padding:11px 13px; border-radius:8px; background:#eef2e7; color:#4a6b2f; font-size:13.5px; display:none; }
+  .err { margin-top:14px; padding:11px 13px; border-radius:8px; background:#fbecea; color:#a8543f; font-size:13.5px; display:none; }
+  details { margin-top:16px; } summary { font-size:12px; color:var(--soft); cursor:pointer; }
+  details input { margin-top:8px; font-size:11.5px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Оставить заявку</h1>
+  <p class="sub">Тестовая форма для XXLcrm — то же самое, что форма на сайте.</p>
+
+  <form id="f">
+    <label for="name">Имя</label>
+    <input id="name" name="Имя" required placeholder="Иван Петров" />
+    <label for="phone">Телефон</label>
+    <input id="phone" name="Телефон" required placeholder="+7 900 000-00-00" />
+    <label for="comment">Что нужно</label>
+    <textarea id="comment" name="Комментарий" placeholder="Опишите задачу"></textarea>
+    <button id="send" type="submit">Отправить заявку</button>
+  </form>
+
+  <div class="ok" id="ok">Заявка ушла в CRM. Загляните в раздел «Сделки» — и в Telegram.</div>
+  <div class="err" id="err"></div>
+
+  <details>
+    <summary>Куда отправляется</summary>
+    <input id="url" />
+    <p class="note">Это URL приёмника вашего пространства. Он же вставляется в конструктор сайта (Tilda, Craftum, WordPress) в поле Webhook — тогда настоящие заявки будут падать так же.</p>
+  </details>
+</div>
+
+<script>
+  // Приёмник заявок пространства: подставлен ваш. Меняется в блоке «Куда отправляется».
+  var HOOK = "https://nddauhfqciuvzbvdipuf.supabase.co/functions/v1/hook?ws=c97e9f35-ada1-440b-a972-e1c33e361066&src=tilda&k=34f650ff5dbc43e0813c32cddaeeffff";
+  var urlBox = document.getElementById("url"), ok = document.getElementById("ok"), err = document.getElementById("err");
+  urlBox.value = HOOK;
+
+  document.getElementById("f").addEventListener("submit", function (e) {
+    e.preventDefault();
+    ok.style.display = err.style.display = "none";
+    var btn = document.getElementById("send");
+    btn.disabled = true; btn.textContent = "Отправляю…";
+    var data = {
+      "Имя": document.getElementById("name").value,
+      "Телефон": document.getElementById("phone").value,
+      "Комментарий": document.getElementById("comment").value
+    };
+    fetch(urlBox.value.trim(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    }).then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); })
+      .then(function (res) {
+        if (res && res.ok) { ok.style.display = "block"; document.getElementById("f").reset(); }
+        else { err.textContent = "Приёмник ответил: " + JSON.stringify(res); err.style.display = "block"; }
+      })
+      .catch(function (ex) { err.textContent = "Не отправилось: " + ex.message; err.style.display = "block"; })
+      .finally(function () { btn.disabled = false; btn.textContent = "Отправить заявку"; });
+  });
+</script>
+</body>
+</html>
