@@ -3,16 +3,25 @@ import { useState } from "react";
 import type { EntityCfg, Field, Rec } from "@/lib/model";
 import { displayValue, fmtMoney } from "@/lib/model";
 import { A, recordsOf, recTitle, openTasksFor, dispCtx, entityCfg, allUsers } from "@/lib/store";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FIELD_TYPES } from "@/lib/model";
 import { FieldInput } from "./FieldInput";
 import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ArrowDown, ArrowUp, Maximize2, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, ListChecks, Maximize2, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (r: import("@/lib/model").Rec) => boolean }) {
   const [editing, setEditing] = useState<{ rec: string; field: string } | null>(null);
   const [quick, setQuick] = useState("");
   const [sort, setSort] = useState<{ fieldId: string; dir: 1 | -1 } | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());     // массовые действия: что выделено
+  const [bulkTask, setBulkTask] = useState("");
+  const [newField, setNewField] = useState({ label: "", type: "text" });
 
   const cols = e.fields.filter(f => f.id !== e.titleFieldId && f.inTable !== false);
   const sorted = filter ? recordsOf(e.id).filter(filter) : [...recordsOf(e.id)];
@@ -42,22 +51,86 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
   );
 
   const moneySum = (f: Field) => sorted.reduce((s, r) => s + (Number(r.values[f.id]) || 0), 0);
+  const allSelected = sorted.length > 0 && sorted.every(r => sel.has(r.id));
+  const ids = [...sel].filter(id => sorted.some(r => r.id === id));   // выделенное, но уже отфильтрованное — не трогаем
 
   return (
+    <>
+    {ids.length > 0 && (
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-1.5 border-b bg-card px-4 py-2 shadow-sm">
+        <span className="text-[12.5px] font-medium">Выбрано: {ids.length}</span>
+        {!!e.stages?.length && (
+          <Select value="" onValueChange={v => { A.bulkStage(ids, v); setSel(new Set()); }}>
+            <SelectTrigger className="h-8 w-[150px] text-[12px]"><SelectValue placeholder="Стадия →" /></SelectTrigger>
+            <SelectContent>{e.stages.map(st => <SelectItem key={st.id} value={st.id}>{st.label}</SelectItem>)}</SelectContent>
+          </Select>
+        )}
+        <Select value="" onValueChange={v => { A.bulkOwner(ids, v); setSel(new Set()); }}>
+          <SelectTrigger className="h-8 w-[150px] text-[12px]"><SelectValue placeholder="Ответственный →" /></SelectTrigger>
+          <SelectContent>{allUsers().map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
+        </Select>
+        <div className="flex items-center gap-1.5">
+          <Input value={bulkTask} onChange={ev => setBulkTask(ev.target.value)} placeholder="Задача всем на завтра…"
+            className="h-8 w-[190px] text-[12px]"
+            onKeyDown={ev => { if (ev.key === "Enter" && bulkTask.trim()) { A.bulkTask(ids, bulkTask.trim(), "call", 24); setBulkTask(""); setSel(new Set()); } }} />
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" disabled={!bulkTask.trim()}
+            onClick={() => { A.bulkTask(ids, bulkTask.trim(), "call", 24); setBulkTask(""); setSel(new Set()); }}>
+            <ListChecks className="size-3.5" /> Поставить
+          </Button>
+        </div>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 border-destructive/40 text-[12px] text-destructive hover:bg-destructive/5"
+          onClick={() => { A.bulkDelete(ids); setSel(new Set()); }}>
+          <Trash2 className="size-3.5" /> Удалить
+        </Button>
+        <button onClick={() => setSel(new Set())} className="press ml-auto inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground">
+          <X className="size-3.5" /> снять выделение
+        </button>
+      </div>
+    )}
     <table className="w-full min-w-max border-separate border-spacing-0 text-[13px]">
       <thead className="sticky top-0 z-10">
         <tr>
-          <Th fieldId="__title" first>{e.fields.find(f => f.id === e.titleFieldId)?.label}</Th>
+          <th className="border-b bg-background pl-4 pr-1">
+            <Checkbox aria-label="Выделить все" checked={allSelected}
+              onCheckedChange={v => setSel(v ? new Set(sorted.map(r => r.id)) : new Set())} />
+          </th>
+          <Th fieldId="__title">{e.fields.find(f => f.id === e.titleFieldId)?.label}</Th>
           {e.stages && <Th>Стадия</Th>}
           {cols.map(f => <Th key={f.id} fieldId={f.id}>{f.label}</Th>)}
           <Th>Ответственный</Th>
+          <th className="border-b bg-background px-2">
+            <Popover>
+              <PopoverTrigger asChild>
+                <button title="Добавить поле в раздел" className="press grid size-6 place-items-center rounded border border-dashed text-muted-foreground hover:border-foreground/30 hover:text-foreground">
+                  <Plus className="size-3.5" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 p-3">
+                <div className="text-[12.5px] font-semibold">Новое поле</div>
+                <Input autoFocus value={newField.label} onChange={ev => setNewField(f => ({ ...f, label: ev.target.value }))}
+                  placeholder="Название поля" className="mt-2 h-8 text-[12.5px]" />
+                <Select value={newField.type} onValueChange={v => setNewField(f => ({ ...f, type: v }))}>
+                  <SelectTrigger className="mt-1.5 h-8 text-[12px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{FIELD_TYPES.filter(t => t.type !== "relation").map(t => <SelectItem key={t.type} value={t.type}>{t.label}</SelectItem>)}</SelectContent>
+                </Select>
+                <Button className="mt-2 h-8 w-full text-[12.5px]" disabled={!newField.label.trim()}
+                  onClick={() => { A.fieldAdd(e.id, { label: newField.label.trim(), type: newField.type as Field["type"], inTable: true }); setNewField({ label: "", type: "text" }); }}>
+                  Добавить
+                </Button>
+              </PopoverContent>
+            </Popover>
+          </th>
           <th className="w-full border-b bg-background" />
         </tr>
       </thead>
       <tbody>
         {sorted.map(r => (
-          <tr key={r.id} className="group/row hover:bg-muted/40">
-            <td className="max-w-72 border-b py-1 pl-5 pr-2">
+          <tr key={r.id} className={cn("group/row hover:bg-muted/40", sel.has(r.id) && "bg-[hsl(var(--brass)/0.09)]")}>
+            <td className="border-b pl-4 pr-1">
+              <Checkbox aria-label="Выделить запись" checked={sel.has(r.id)}
+                onCheckedChange={v => setSel(prev => { const n = new Set(prev); if (v) n.add(r.id); else n.delete(r.id); return n; })} />
+            </td>
+            <td className="max-w-72 border-b py-1 pr-2">
               <div className="flex items-center gap-2">
                 {openTasksFor(r.id).some(t => t.due < Date.now()) && <span title="Просроченная задача" className="size-1.5 shrink-0 rounded-full bg-destructive" />}
                 <button className="truncate py-1 text-left font-medium underline-offset-2 hover:underline" onClick={() => A.openRecord(r.id)}>
@@ -118,6 +191,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
         </tfoot>
       )}
     </table>
+    </>
   );
 }
 

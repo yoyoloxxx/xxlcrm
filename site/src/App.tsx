@@ -14,6 +14,11 @@ import { CommandPalette } from "@/components/live/CommandPalette";
 import { CalendarLive } from "@/components/live/CalendarLive";
 import { ImportDialog } from "@/components/live/ImportDialog";
 import { getViewState, setViewState } from "@/lib/viewstate";
+import type { SavedSeg } from "@/lib/viewstate";
+import type { Cond } from "@/lib/filters";
+import { matchAll } from "@/lib/filters";
+import { FilterBar } from "@/components/live/FilterBar";
+import { toCSV, downloadCSV } from "@/lib/export";
 import { initIntegrations } from "@/lib/integrations";
 import { cloudBoot, renameWs } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
@@ -26,13 +31,13 @@ import { ensureBirthdayTasks } from "@/lib/bday";
 import { initAutomations } from "@/lib/automations";
 import { AutomationsLive } from "@/components/live/AutomationsLive";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Rec } from "@/lib/model";
+import type { Rec, EntityCfg } from "@/lib/model";
 import { DAY, now, fmtMoney, relTime, plural, displayValue } from "@/lib/model";
 import {
   Calendar, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks,
   Moon, Package, PanelLeft, Plus,
-  Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap,
+  Route as RouteIcon, Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -42,12 +47,12 @@ const NAV: { id: Page; label: string; icon: React.ElementType; badge?: () => num
   { id: "myday", label: "Мой день", icon: SunMedium },
   { id: "tasks", label: "Задачи", icon: ListChecks, badge: () => getState().tasks.filter(t => !t.done).length },
   { id: "inbox", label: "Входящие", icon: InboxIcon, badge: () => getState().chats.reduce((n, c) => n + c.unread, 0) },
-  { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
+  { id: "routing", label: "Приём заявок", icon: RouteIcon },
   { id: "automations", label: "Автоматизации", icon: Zap },
 ];
 const TITLES: Record<string, string> = {
   myday: "Мой день", tasks: "Задачи", inbox: "Входящие",
-  dashboard: "Дашборд", automations: "Автоматизации", settings: "Настройки",
+  routing: "Приём заявок", automations: "Автоматизации", settings: "Настройки",
 };
 
 // Кнопка «Скоро»: только для блока честных заглушек — в рабочих местах интерфейса её быть не должно
@@ -80,7 +85,7 @@ function Avatar({ n, hue, size = 22 }: { n: string; hue: number; size?: number }
 
 export default function App() {
   const s = useApp();
-  const [page, setPage] = useState<Page>("ent:deals");
+  const [page, setPage] = useState<Page>("myday"); // утро начинается с «что у меня сегодня», а не с воронки
   const [newEnt, setNewEnt] = useState(false);
   const [palette, setPalette] = useState(false); // Ctrl+K — общий поиск по всему пространству
   const [sidebar, setSidebar] = useState(true);  // сворачивание — чтобы на ноутбуке таблице доставалась вся ширина
@@ -143,7 +148,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.14</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.16</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -255,13 +260,18 @@ export default function App() {
           {page === "tasks" && <TasksLive goInbox={() => setPage("inbox")} />}
           {page === "inbox" && <InboxLive goSettings={() => setPage("settings")} />}
           {entId && s.entities.some(e => e.id === entId) && <EntityScreen key={entId} id={entId} openSetup={() => setSetupEnt(entId)} />}
-          {page === "dashboard" && <Dashboard onPresets={openPresets} />}
+          {page === "routing" && (
+            <div className="cascade mx-auto max-w-2xl px-5 py-6">
+              <ScreenHead title="Приём заявок" sub="Что система делает сама с каждым входящим сообщением и заявкой с сайта" />
+              <div className="mt-5 rounded-lg border bg-card"><RoutingLive goSettings={() => setPage("settings")} /></div>
+            </div>
+          )}
           {page === "automations" && <AutomationsLive />}
           {page === "settings" && <SettingsScreen theme={theme} setTheme={setTheme} />}
         </main>
 
         <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3.5">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.14 · приём на сервере + уведомление в Telegram, повторное обращение поднимает новую заявку, загрузка из Excel, поиск Ctrl+K</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.16 · фильтры по любым полям и свои сегменты, массовые действия, выгрузка в CSV, сводка внутри раздела, поле на лету</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -293,7 +303,7 @@ function ScreenHead({ title, sub, children }: { title: string; sub?: string; chi
   );
 }
 
-type ViewId = "kanban" | "table" | "calendar";
+type ViewId = "kanban" | "table" | "calendar" | "stats";
 
 function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) {
   const e = entityCfg(id);
@@ -304,6 +314,8 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   const [q, setQ] = useState(saved.q);
   const [mine, setMine] = useState(saved.mine);
   const [seg, setSeg] = useState(saved.seg);
+  const [conds, setConds] = useState<Cond[]>(saved.conds);      // фильтр по любым полям
+  const [segs, setSegs] = useState<SavedSeg[]>(saved.saved);    // сохранённые наборы условий
   const [importOpen, setImportOpen] = useState(false);
   const count = recordsOf(id).length;
   const lastAct = (rid: string) => {
@@ -311,9 +323,10 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
     for (const a of getState().activities) if (a.recordId === rid && a.ts > last) last = a.ts;
     return last;
   };
-  const filterOn = !!q.trim() || mine || seg !== "all";
+  const filterOn = !!q.trim() || mine || seg !== "all" || conds.length > 0;
   const pred = (r: Rec): boolean => {
     if (mine && r.ownerId !== getState().currentUserId) return false;
+    if (conds.length && !matchAll(r, e, conds, dispCtx())) return false;
     if (q.trim()) {
       const needle = q.trim().toLowerCase();
       if (!recTitle(r.id).toLowerCase().includes(needle) && !JSON.stringify(r.values).toLowerCase().includes(needle)) return false;
@@ -327,10 +340,10 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   };
   const shown = filterOn ? recordsOf(id).filter(pred).length : count;
   const tabs: [ViewId, string, React.ElementType][] = hasStages
-    ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]]
-    : [["table", "Таблица", Table2], ["calendar", "Календарь", Calendar]];
+    ? [["kanban", "Канбан", Columns3], ["table", "Таблица", Table2], ["calendar", "Календарь", Calendar], ["stats", "Сводка", LayoutDashboard]]
+    : [["table", "Таблица", Table2], ["calendar", "Календарь", Calendar], ["stats", "Сводка", LayoutDashboard]];
   const activeView = tabs.some(t => t[0] === view) ? view : tabs[0][0];
-  useEffect(() => { setViewState(id, { view: activeView, q, mine, seg }); }, [id, activeView, q, mine, seg]);
+  useEffect(() => { setViewState(id, { view: activeView, q, mine, seg, conds, saved: segs }); }, [id, activeView, q, mine, seg, conds, segs]);
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-5 pt-4">
@@ -338,6 +351,11 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
           <button onClick={openSetup}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
+          </button>
+          <button onClick={() => downloadCSV(e.namePlural, toCSV(e, filterOn ? recordsOf(id).filter(pred) : recordsOf(id), dispCtx()))}
+            title="Выгрузить в CSV то, что сейчас на экране — открывается в Excel"
+            className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
+            <Download className="size-3" /> Выгрузить
           </button>
           <button onClick={() => setImportOpen(true)} title="Загрузить клиентов и заказы из Excel или другой CRM"
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
@@ -364,7 +382,12 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
               <input value={q} onChange={ev => setQ(ev.target.value)} placeholder="Поиск в разделе…"
                 className="h-7 w-40 rounded-md border bg-card pl-7 pr-2 text-[12px] outline-none transition-colors focus:border-ring" />
             </div>
-            <Select value={seg} onValueChange={setSeg}>
+            <FilterBar entity={e} conds={conds} onChange={setConds}
+              onSave={(name, c) => { setSegs(prev => [...prev, { id: "sv" + Date.now().toString(36), name, conds: c }]); toast.success(`Сегмент «${name}» сохранён`); }} />
+            <Select value={seg} onValueChange={v => {
+              if (v.startsWith("sv:")) { const sv = segs.find(x => x.id === v.slice(3)); if (sv) { setConds(sv.conds); setSeg("all"); } return; }
+              setSeg(v);
+            }}>
               <SelectTrigger className={cn("h-7 w-[132px] text-[12px]", seg !== "all" && "border-transparent font-medium")}
                 style={seg !== "all" ? { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" } : undefined}>
                 <SelectValue />
@@ -375,6 +398,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
                 {hasStages && <SelectItem value="won">Успешные</SelectItem>}
                 <SelectItem value="quiet">Спящие 60+ дн.</SelectItem>
                 <SelectItem value="notask">Без задачи</SelectItem>
+                {segs.map(sv => <SelectItem key={sv.id} value={"sv:" + sv.id}>★ {sv.name}</SelectItem>)}
               </SelectContent>
             </Select>
             <button onClick={() => setMine(m => !m)} title="Только мои записи"
@@ -390,17 +414,18 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
         {activeView === "kanban" && hasStages && <KanbanLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "table" && <TableLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "calendar" && <CalendarLive entity={e} filter={filterOn ? pred : undefined} />}
+        {activeView === "stats" && <Dashboard entity={e} />}
       </div>
       <ImportDialog entity={e} open={importOpen} onOpenChange={setImportOpen} />
     </div>
   );
 }
 
-function Dashboard({ onPresets }: { onPresets?: () => void }) {
+function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () => void }) {
   useApp(); // живая подписка на стор
   const s = getState();
   const pipelines = allEntities().filter(e => (e.stages?.length ?? 0) > 0);
-  const primary = pipelines[0];
+  const primary = entity ?? pipelines[0];   // сводка по разделу, в котором стоишь
   const recs = primary ? s.records.filter(r => r.entityId === primary.id) : [];
 
   // Нет воронки или совсем нет записей — честное пустое состояние вместо выдуманных цифр.

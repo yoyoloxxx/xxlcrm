@@ -449,6 +449,80 @@ export const A = {
     if (created || merged) markSetup("imported");
     return { created, merged };
   },
+  // ---------- массовые действия: одна мутация и одна отмена на всю пачку ----------
+  bulkStage(ids: string[], stageId: string) {
+    pushHistory();
+    mut(s => {
+      let pos = Math.max(0, ...s.records.filter(r => r.stageId === stageId).map(r => r.pos ?? 0));
+      for (const id of ids) {
+        const r = s.records.find(x => x.id === id); if (!r) continue;
+        const stage = entityCfg(r.entityId).stages?.find(x => x.id === stageId); if (!stage) continue;
+        if (r.stageId !== stageId) {
+          r.stageId = stageId; r.stageAt = now(); r.pos = (pos += 1000); r.updatedAt = now();
+          pushAct(r.id, "stage", `Стадия: ${stage.label}`, s.currentUserId);
+          const rid = r.id;
+          queueMicrotask(() => ruleHooks.stage?.(rid, stageId));
+        }
+      }
+    });
+    toast(`Стадия изменена: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`, { description: "Ctrl+Z вернёт" });
+  },
+  bulkOwner(ids: string[], userId: string) {
+    pushHistory();
+    mut(s => {
+      for (const id of ids) {
+        const r = s.records.find(x => x.id === id); if (!r || r.ownerId === userId) continue;
+        r.ownerId = userId; r.updatedAt = now();
+        pushAct(r.id, "field", `Ответственный: ${userName(userId)}`, s.currentUserId);
+      }
+    });
+    toast(`Ответственный назначен: ${userName(userId)}`, { description: "Ctrl+Z вернёт" });
+  },
+  bulkTask(ids: string[], title: string, kind: Task["kind"], dueOffsetH: number) {
+    pushHistory();
+    mut(s => {
+      for (const id of ids) {
+        const r = s.records.find(x => x.id === id); if (!r) continue;
+        s.tasks.push({ id: uid("t"), title, kind, recordId: id, ownerId: r.ownerId, due: now() + dueOffsetH * 3600000, done: false });
+        pushAct(id, "task", `Задача: ${title}`, s.currentUserId);
+      }
+    });
+    toast(`Задача поставлена по ${ids.length} ${plural(ids.length, "записи", "записям", "записям")}`);
+  },
+  bulkDelete(ids: string[]) {
+    pushHistory();
+    const set = new Set(ids);
+    mut(s => {
+      s.records = s.records.filter(r => !set.has(r.id));
+      s.tasks = s.tasks.filter(t => !t.recordId || !set.has(t.recordId));
+      s.activities = s.activities.filter(a => !set.has(a.recordId));
+      s.chats.forEach(c => { if (c.recordId && set.has(c.recordId)) c.recordId = undefined; });
+      if (s.drawerRecordId && set.has(s.drawerRecordId)) s.drawerRecordId = null;
+    });
+    toast(`Удалено: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`, { description: "Ctrl+Z вернёт" });
+  },
+  // слить дубли: всё из второй карточки переезжает в первую, вторая удаляется
+  mergeRecords(keepId: string, dropId: string) {
+    if (keepId === dropId) return;
+    pushHistory();
+    mut(s => {
+      const keep = s.records.find(r => r.id === keepId), drop = s.records.find(r => r.id === dropId);
+      if (!keep || !drop) return;
+      for (const [k, v] of Object.entries(drop.values)) if (keep.values[k] === undefined || keep.values[k] === "") keep.values[k] = v;
+      keep.updatedAt = now();
+      s.tasks.forEach(t => { if (t.recordId === dropId) t.recordId = keepId; });
+      s.activities.forEach(a => { if (a.recordId === dropId) a.recordId = keepId; });
+      s.chats.forEach(c => { if (c.recordId === dropId) c.recordId = keepId; });
+      s.records.forEach(r => {                       // ссылки-связи других записей переводим на выжившую
+        const e = s.entities.find(x => x.id === r.entityId);
+        e?.fields.forEach(f => { if (f.type === "relation" && r.values[f.id] === dropId) r.values[f.id] = keepId; });
+      });
+      s.records = s.records.filter(r => r.id !== dropId);
+      if (s.drawerRecordId === dropId) s.drawerRecordId = keepId;
+      pushAct(keepId, "comment", "Объединено с дублем", s.currentUserId);
+    });
+    toast.success("Карточки объединены", { description: "Ctrl+Z вернёт" });
+  },
   deleteRecord(recId: string) {
     pushHistory();
     mut(s => {

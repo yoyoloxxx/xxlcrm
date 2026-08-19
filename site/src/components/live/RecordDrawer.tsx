@@ -5,7 +5,8 @@ import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
 import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, entityCfg as entCfg } from "@/lib/store";
 import { sendChatMessage } from "@/lib/integrations";
 import { fillTemplate } from "@/lib/fill";
-import { channelName } from "@/lib/model";
+import { channelName, FIELD_TYPES } from "@/lib/model";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FieldInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
@@ -101,6 +102,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
                 </div>
               ))}
             </div>
+            <AddFieldInline entityId={e.id} />
           </section>
 
           <section className="border-t px-4 py-3.5">
@@ -212,6 +214,38 @@ function RelatedBlock({ recId }: { recId: string }) {
         ))}
       </div>
     </section>
+  );
+}
+
+// Поле можно завести прямо из карточки: понял в моменте, что нужен «трек-номер» — добавил, не уходя в конструктор
+function AddFieldInline({ entityId }: { entityId: string }) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState("");
+  const [type, setType] = useState("text");
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="press mt-2.5 inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed px-2 text-[11.5px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
+        <Plus className="size-3" /> поле
+      </button>
+    );
+  }
+  const save = () => {
+    if (!label.trim()) return;
+    A.fieldAdd(entityId, { label: label.trim(), type: type as never, inTable: true });
+    setLabel(""); setType("text"); setOpen(false);
+  };
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5 rounded-md border border-dashed p-2">
+      <Input autoFocus value={label} onChange={e => setLabel(e.target.value)} placeholder="Название поля"
+        onKeyDown={e => e.key === "Enter" && save()} className="h-8 w-[150px] text-[12px]" />
+      <Select value={type} onValueChange={setType}>
+        <SelectTrigger className="h-8 w-[130px] text-[12px]"><SelectValue /></SelectTrigger>
+        <SelectContent>{FIELD_TYPES.filter(t => t.type !== "relation").map(t => <SelectItem key={t.type} value={t.type}>{t.label}</SelectItem>)}</SelectContent>
+      </Select>
+      <Button size="sm" className="h-8 text-[12px]" disabled={!label.trim()} onClick={save}>Добавить</Button>
+      <button onClick={() => setOpen(false)} className="press rounded p-1 text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+    </div>
   );
 }
 
