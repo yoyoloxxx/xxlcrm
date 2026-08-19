@@ -7,6 +7,7 @@ import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, R
 import { uid, defaultRules, defaultRoutes } from "./model";
 import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
+import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
 
 let wsId: string | null = null;
@@ -175,6 +176,8 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
 
   cloudHooks.save = scheduleSave;
   subscribeRealtime(id);
+  void inboundBoot(id);      // что сервер принял, пока приложение было закрыто
+  inboundSubscribe(id);
   toast.success(`Облако подключено: ${wss.data?.name}`, { description: "Данные общие для команды и синхронизируются сами" });
 }
 

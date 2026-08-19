@@ -3,6 +3,8 @@ import { useState } from "react";
 import type { IntStatus } from "@/lib/model";
 import { useApp, A } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
+import { tgUseServer, tgUsePolling, ensureHookSecret, hookUrl } from "@/lib/inbound";
+import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -129,6 +131,16 @@ export function IntegrationsLive() {
   const [waId, setWaId] = useState(ints.wa.idInstance);
   const [waToken, setWaToken] = useState(ints.wa.apiToken);
   const [maxToken, setMaxToken] = useState(ints.max.token);
+  const [ownHook, setOwnHook] = useState("");
+  // свой приёмник форм: URL функции с секретом пространства — заявки с сайта падают в CRM без браузера
+  const makeOwnHook = async () => {
+    const secret = await ensureHookSecret("tilda");
+    const ws = s.wsId;
+    if (!secret || !ws) return;
+    const url = hookUrl(ws, "tilda", secret);
+    setOwnHook(url);
+    navigator.clipboard?.writeText(url).then(() => toast.success("URL приёмника скопирован", { description: "Вставьте в Тильде: Формы → Webhook" }));
+  };
 
   return (
     <div className="px-4 py-3.5">
@@ -150,8 +162,26 @@ export function IntegrationsLive() {
         <div className="mt-2 flex gap-2">
           <Input className="h-9 flex-1 text-[12.5px]" type="password" placeholder="123456789:AA…" value={tgToken} onChange={e => setTgToken(e.target.value)} />
           <Button className="h-9" disabled={!tgToken.trim() || ints.tg.status === "connecting"} onClick={() => tgConnect(tgToken)}>Подключить</Button>
-          {ints.tg.status === "ok" && <Button variant="outline" className="h-9" onClick={() => { A.intPatch(i => { i.tg = { token: "", status: "off" }; }); setTgToken(""); }}>Откл.</Button>}
         </div>
+        {ints.tg.status === "ok" && (
+          <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-md border border-dashed p-2.5">
+            <span>
+              <span className="block text-[12px] font-medium">Приём на сервере {ints.tg.mode === "hook" ? "— включён" : ""}</span>
+              <span className="block text-[11px] leading-snug text-muted-foreground">
+                {ints.tg.mode === "hook"
+                  ? "Сообщения идут на наш сервер и становятся заявками, даже когда браузер закрыт"
+                  : "Сейчас бот опрашивается из этой вкладки: закрыли браузер — сообщения ждут. Включите, чтобы приходили всегда"}
+              </span>
+            </span>
+            <Switch checked={ints.tg.mode === "hook"} onCheckedChange={v => { if (v) void tgUseServer(ints.tg.token); else void tgUsePolling(ints.tg.token); }} />
+          </label>
+        )}
+        {ints.tg.status === "ok" && (
+          <Button variant="outline" className="mt-2 h-8 text-[12px]"
+            onClick={() => { if (ints.tg.mode === "hook") void tgUsePolling(ints.tg.token); A.intPatch(i => { i.tg = { token: "", status: "off" }; }); setTgToken(""); }}>
+            Отключить бота
+          </Button>
+        )}
       </div>
 
       <div className="mt-2 rounded-md border p-3">
@@ -181,6 +211,14 @@ export function IntegrationsLive() {
         </div>
       </div>
 
+      {!!ownHook && (
+        <div className="mt-2 rounded-md border p-3">
+          <div className="text-[12.5px] font-semibold">Ваш серверный приёмник заявок</div>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Вставьте в Тильде: Настройки сайта → Формы → Webhook. Работает всегда, браузер не нужен.</p>
+          <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{ownHook}</code>
+        </div>
+      )}
+
       <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">Tilda: заявки с сайта <Status st={ints.tilda.status} okText="мост активен" /></div>
         {ints.tilda.status !== "ok" ? (
@@ -189,7 +227,12 @@ export function IntegrationsLive() {
               Создам URL-приёмник (мост для теста; свой приёмник будет на шаге Supabase). Вставьте его в Тильде: Настройки сайта → Формы → Webhook — заявки сами станут сделками.
             </p>
             {ints.tilda.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tilda.error}</p>}
-            <Button className="mt-2 h-9" disabled={ints.tilda.status === "connecting"} onClick={tildaCreateHook}>Создать URL для Tilda</Button>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {s.mode === "cloud" && <Button className="h-9" onClick={() => void makeOwnHook()}>Создать свой URL (сервер)</Button>}
+              <Button variant={s.mode === "cloud" ? "outline" : "default"} className="h-9" disabled={ints.tilda.status === "connecting"} onClick={tildaCreateHook}>
+                Временный мост (работает при открытой вкладке)
+              </Button>
+            </div>
           </>
         ) : (
           <div className="mt-2 flex items-center gap-2">

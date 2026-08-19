@@ -36,7 +36,7 @@ export type IntStatus = "off" | "connecting" | "ok" | "error";
 export type TguStage = "creds" | "code" | "password"; // шаги входа в личный Telegram
 export interface Integrations {
   tgUser: { apiId: string; apiHash: string; phone: string; session: string; status: IntStatus; stage?: TguStage; name?: string; error?: string };
-  tg: { token: string; status: IntStatus; botName?: string; offset?: number; error?: string };
+  tg: { token: string; status: IntStatus; botName?: string; offset?: number; error?: string; mode?: "poll" | "hook" }; // hook = приём на сервере
   wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string };
   max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string };
   tilda: { hookId: string; status: IntStatus; seen: string[]; error?: string };

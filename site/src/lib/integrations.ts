@@ -28,6 +28,7 @@ interface TgMsg { chat: { id: number; title?: string }; from?: { first_name?: st
 async function tgTick() {
   const cfg = ints().tg;
   if (cfg.status !== "ok" || !cfg.token) return;
+  if (cfg.mode === "hook") return; // приём идёт на сервер — из браузера не опрашиваем
   try {
     const res = await fetch(tgApi(cfg.token, `getUpdates?timeout=0&limit=30${cfg.offset ? `&offset=${cfg.offset}` : ""}`));
     const data = await res.json();
