@@ -1,4 +1,4 @@
--- XXLcrm · серверный приём заявок (v0.12). Запускается один раз в SQL Editor после supabase-init.sql.
+-- XXLcrm · серверный приём заявок (v0.16). Запускается один раз в SQL Editor после supabase-init.sql.
 -- Смысл: сообщения и заявки приходят на сервер, а не в открытую вкладку браузера.
 
 -- Секреты вебхуков: по одному на пространство и источник. Клиент их создаёт, функция сверяет.
@@ -28,6 +28,16 @@ create table if not exists public.inbound (
   created_at timestamptz not null default now()
 );
 create index if not exists inbound_ws on public.inbound (workspace_id, processed);
+
+-- Идемпотентность доставки: Telegram повторяет апдейт, если не увидел 200 вовремя.
+-- Без этого повтор заводил второй такой же диалог и накручивал непрочитанные.
+alter table public.inbound add column if not exists ext_key text;
+create unique index if not exists inbound_dedup on public.inbound (workspace_id, source, ext_key)
+  where ext_key is not null;
+
+-- Маршруты приёма («куда падают заявки») лежат рядом со структурой. Колонки не было в первой
+-- схеме, из-за чего серверная функция падала на запросе и заявки молча терялись.
+alter table public.ws_config add column if not exists automations jsonb;
 
 alter table public.channel_hooks enable row level security;
 alter table public.inbound enable row level security;

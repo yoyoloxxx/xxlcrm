@@ -13,13 +13,19 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.15"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.16"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
 const json = (body: Any, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...CORS } });
 const uid = (p: string) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+// Тот же порог, что и в приложении: меньше семи цифр — не телефон, склеивать по нему нельзя.
+// «» === «» приклеивало заявку без телефона к случайному чужому клиенту.
+const digits = (v: unknown): string => {
+  const d = String(v ?? "").replace(/\D/g, "");
+  if (d.length < 7) return "\u0000нет";
+  return d.length >= 10 ? d.slice(-10) : d;
+};
 
 // ---------- разбор входящего ----------
 interface Msg { ext: Any; name: string; phone?: string; text: string; fields?: Any }
@@ -63,7 +69,12 @@ function parseForm(fields: Any): Msg {
   return { ext: {}, name, phone, text, fields };
 }
 
+const BODY_MAX = 64 * 1024;               // 64 КБ хватит любой заявке; больше — не читаем
+const cut = (v: string) => (v.length > 8000 ? v.slice(0, 8000) + "…" : v);
+
 async function readPayload(req: Request): Promise<Any> {
+  const len = Number(req.headers.get("content-length") ?? 0);
+  if (len > BODY_MAX) return {};
   const ct = req.headers.get("content-type") ?? "";
   if (ct.includes("application/json")) return await req.json().catch(() => ({}));
   if (ct.includes("form")) {
@@ -73,7 +84,7 @@ async function readPayload(req: Request): Promise<Any> {
     for (const [k, v] of fd.entries()) o[k] = typeof v === "string" ? v : "[файл]";
     return o;
   }
-  const raw = await req.text().catch(() => "");
+  const raw = (await req.text().catch(() => "")).slice(0, BODY_MAX);
   try { return JSON.parse(raw); } catch { return raw ? { text: raw } : {}; }
 }
 
@@ -96,13 +107,15 @@ async function notify(ws: string, text: string): Promise<void> {
   }
 }
 
-// «/start notify_<workspace>» у своего бота = подписка на уведомления
-async function handleStart(body: Any): Promise<boolean> {
+// «/start notify_...» у своего бота = подписка на уведомления.
+// ws берём ИЗ ПРОВЕРЕННОГО СЕКРЕТОМ адреса, а не из текста сообщения: иначе любой, кто узнал
+// id чужого пространства, писал боту «/start notify_<чужой ws>» и получал чужие заявки себе в ТГ.
+async function handleStart(ws: string, body: Any): Promise<boolean> {
   const m = body?.message;
   const text: string = m?.text ?? "";
   if (!m?.chat || !text.startsWith("/start")) return false;
   const arg = text.split(/\s+/)[1] ?? "";
-  const ws = arg.startsWith("notify_") ? arg.slice(7) : "";
+  if (!arg.startsWith("notify_")) return false;
   if (!ws) return false;
   const name = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(" ") || m.from?.username || "";
   const { count } = await db.from("notify_targets").select("chat_id", { count: "exact", head: true }).eq("workspace_id", ws);
@@ -119,9 +132,15 @@ async function handleStart(body: Any): Promise<boolean> {
 
 // ---------- превращение входящего в диалог и заявку ----------
 async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
-  const { data: cfg } = await db.from("ws_config").select("entities, automations").eq("workspace_id", ws).maybeSingle();
+  // Колонки automations может не быть в старой схеме. Раньше запрос падал целиком и заявка
+  // молча терялась — теперь структуру берём отдельным запросом, а маршруты по возможности.
+  const { data: cfg } = await db.from("ws_config").select("entities").eq("workspace_id", ws).maybeSingle();
   const entities: Any[] = (cfg?.entities as Any[]) ?? [];
-  const autoCol: Any = cfg?.automations ?? {};
+  let autoCol: Any = {};
+  try {
+    const { data: a } = await db.from("ws_config").select("automations").eq("workspace_id", ws).maybeSingle();
+    autoCol = a?.automations ?? {};
+  } catch { autoCol = {}; }
   const routes: Any[] = Array.isArray(autoCol) ? [] : (autoCol.routes ?? []);
   const route: Any = routes.find(r => r.source === src) ?? { source: src, auto: true, createClient: true };
 
@@ -289,7 +308,15 @@ Deno.serve(async (req: Request) => {
   if (!hook?.secret || hook.secret !== key) return json({ ok: false, error: "bad key" }, 401);
 
   const payload = await readPayload(req);
-  if (src === "tg" && await handleStart(payload)) return json({ ok: true, subscribed: true });
+  // Идемпотентность: Telegram повторяет доставку, если не увидел 200 вовремя. Раньше повтор
+  // плодил второй такой же диалог и накручивал счётчик непрочитанных.
+  const dedupId = String(payload?.update_id ?? payload?.message_id ?? payload?.marker ?? "");
+  if (dedupId) {
+    const { data: seen } = await db.from("inbound")
+      .select("id").eq("workspace_id", ws).eq("source", src).eq("ext_key", dedupId).limit(1);
+    if (seen && seen.length) return json({ ok: true, duplicate: true });
+  }
+  if (src === "tg" && await handleStart(ws, payload)) return json({ ok: true, subscribed: true });
   const msg = src === "tg" ? parseTelegram(payload)
     : src === "wa" ? parseWhatsApp(payload)
     : src === "max" ? parseMax(payload)
@@ -305,8 +332,9 @@ Deno.serve(async (req: Request) => {
     console.error("ingest failed", error);
   }
   await db.from("inbound").insert({
-    workspace_id: ws, source: src, ext: msg.ext, name: msg.name, phone: msg.phone ?? null,
-    text: msg.text, fields: msg.fields ?? null, ts: Date.now(), processed, error,
+    workspace_id: ws, source: src, ext: msg.ext, name: cut(msg.name ?? ""), phone: msg.phone ?? null,
+    text: cut(msg.text ?? ""), fields: msg.fields ?? null, ts: Date.now(), processed, error,
+    ext_key: dedupId || null,
   });
   return json({ ok: true });
 });

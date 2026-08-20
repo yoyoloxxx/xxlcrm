@@ -108,7 +108,9 @@ export async function maxUsePolling(token: string): Promise<void> {
 }
 
 // ---------- уведомления о заявках в Telegram ----------
-export const notifyLink = (botName: string, ws: string) => `https://t.me/${botName.replace(/^@/, "")}?start=notify_${ws}`;
+// Пространство сервер берёт из проверенного секретом адреса вебхука, а не отсюда:
+// раньше по такой ссылке с ЧУЖИМ id можно было подписаться на чужие заявки.
+export const notifyLink = (botName: string, ws: string) => `https://t.me/${botName.replace(/^@/, "")}?start=notify_${ws.slice(0, 8)}`;
 export async function notifyTargets(): Promise<{ chat_id: string; name: string | null }[]> {
   const ws = getState().wsId;
   if (!ws) return [];
