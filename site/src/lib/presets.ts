@@ -231,7 +231,10 @@ export function buildPresetData(p: Preset): { entities: EntityCfg[]; automations
   const mk = (entityId: string, values: Record<string, unknown>, o: { stage?: string; owner?: string; ago?: number }) => {
     n[entityId] = (n[entityId] ?? 0) + 1;
     const createdAt = days(-(o.ago ?? 3));
-    const r: Rec = { id: uid("r"), entityId, num: n[entityId], values, ownerId: o.owner ?? "u1", createdAt, updatedAt: createdAt, stageId: o.stage, stageAt: createdAt + 3600000 };
+    // demo: true — это ПРИМЕР ниши, а не работа человека. Без метки «Очистить примеры»
+    // отвечало «примеров уже нет» и не убирало ничего, а при переезде в облако выдуманные
+    // Денис Коваль и Кирилл Дёмин уезжали в общую базу как «уже наработанное».
+    const r: Rec = { id: uid("r"), entityId, num: n[entityId], values, ownerId: o.owner ?? "u1", createdAt, updatedAt: createdAt, stageId: o.stage, stageAt: createdAt + 3600000, demo: true };
     records.push(r);
     activities.push({ id: uid("a"), recordId: r.id, ts: createdAt, kind: "created", text: "Запись создана", userId: r.ownerId });
     return r;
@@ -253,7 +256,7 @@ export function buildPresetData(p: Preset): { entities: EntityCfg[]; automations
   }
 
   const chats: Chat[] = (p.chats ?? []).map(ch => ({
-    id: uid("c"), name: ch.name, channel: ch.channel, unread: ch.unread ?? 0, phone: ch.phone,
+    id: uid("c"), name: ch.name, channel: ch.channel, unread: ch.unread ?? 0, phone: ch.phone, demo: true,
     recordId: ch.dealTitle ? records.find(r => r.entityId === "deals" && r.values.title === ch.dealTitle)?.id : undefined,
     msgs: ch.msgs.map(([agoH, out, text]) => ({ id: uid("m"), ts: now() - agoH * 3600000, out, text })),
   }));

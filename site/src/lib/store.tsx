@@ -10,7 +10,7 @@ import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
 import { markSetup } from "./setup";
 import { parseRuDate as parseRu } from "./rudate";
 import { parseNumCell } from "./csv";
-import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset } from "./presets";
+import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset, PRESETS } from "./presets";
 
 interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
@@ -40,6 +40,14 @@ function markLegacyDemo(d: { records?: unknown; tasks?: unknown; chats?: unknown
   const rs = new Set(ex.records.map(r => sig(r.entityId, r.values.title)));
   const ts = new Set(ex.tasks.map(t => t.title));
   const cs = new Set(ex.chats.map(c => c.name));
+  // Примеры ниш раньше создавались вообще без метки: «Очистить примеры» отвечало
+  // «примеров уже нет», а выдуманные клиенты уезжали в облако как своя работа.
+  // Новые помечаются при создании; у тех, кто применил шаблон раньше, узнаём их здесь.
+  for (const p of PRESETS) {
+    for (const c of p.clients) rs.add(sig("contacts", c.name));
+    for (const d of p.deals) rs.add(sig("deals", d.title));
+    for (const ch of p.chats ?? []) cs.add(ch.name);
+  }
   for (const r of recs) if (rs.has(sig(r.entityId, r.values.title))) r.demo = true;
   if (Array.isArray(d.tasks)) for (const t of d.tasks as Task[]) if (ts.has(t.title)) t.demo = true;
   if (Array.isArray(d.chats)) for (const c of d.chats as Chat[]) if (cs.has(c.name)) c.demo = true;
