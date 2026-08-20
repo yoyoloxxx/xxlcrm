@@ -255,8 +255,8 @@ function mut(fn: (s: State) => void) { fn(st); emit(); }
 // удалённой записью исчезала заявка, пришедшая минуту назад, а в общем пространстве — работа
 // коллег. Теперь запоминаем РАЗНИЦУ: что действие добавило, что убрало, что изменило, — и
 // отменяем только это. Всё, что случилось параллельно, остаётся на месте.
-type Coll = "entities" | "records" | "tasks" | "activities" | "automations" | "routes" | "chats";
-const COLLS: Coll[] = ["entities", "records", "tasks", "activities", "automations", "routes", "chats"];
+type Coll = "entities" | "records" | "tasks" | "activities" | "automations" | "routes" | "chats" | "replyTemplates";
+const COLLS: Coll[] = ["entities", "records", "tasks", "activities", "automations", "routes", "chats", "replyTemplates"];
 type Shot = Record<Coll, Map<string, string>>;                     // id → JSON
 type Delta = { added: string[]; removed: [number, string][]; changed: [string, string][] };
 type Step = { label: string; delta: Partial<Record<Coll, Delta>> };
@@ -494,6 +494,11 @@ function repairAndTell(s: State) {
   const notes = repairStructure(s);
   if (notes.length) queueMicrotask(() => toast("Настройки подстроены под новую структуру", { description: notes.join(" · ") }));
 }
+
+// Диалог не резиновый: чужой человек может слать сообщения бесконечно, а место в браузере
+// общее — забив его, он заодно останавливает сохранение всей работы владельца.
+const CHAT_MAX = 500;
+function trimChat(c: Chat) { if (c.msgs.length > CHAT_MAX) c.msgs.splice(0, c.msgs.length - CHAT_MAX); }
 
 const ACT_MAX = 240;                                  // в хронику — суть, а не мегабайт текста
 function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string, editKey?: string) {
@@ -838,6 +843,7 @@ export const A = {
     return true;
   },
   taskDelete(taskId: string) {
+    pushHistory("удаление задачи");
     mut(s => { s.tasks = s.tasks.filter(t => t.id !== taskId); });
   },
   openChatWithDraft(chatId: string, text: string) {
@@ -893,6 +899,7 @@ export const A = {
     mut(s => {
       const c = s.chats.find(x => x.id === chatId)!;
       c.msgs.push({ id: uid("m"), ts: now(), out: true, text });
+      trimChat(c);
       if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)}: ${text}`, s.currentUserId);
     });
   },
@@ -900,6 +907,7 @@ export const A = {
     mut(s => {
       const c = s.chats.find(x => x.id === chatId); if (!c) return;
       c.msgs.push({ id: uid("m"), ts: now(), out: false, text });
+      trimChat(c);
       if (s.activeChatId !== c.id) c.unread++;
       if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `${channelName(c.channel)}, клиент: ${text}`);
     });
@@ -924,6 +932,7 @@ export const A = {
       let c = s.chats.find(x => x.ext && chatExtMatch(x.ext, ext));
       if (!c) { c = { id: uid("c"), name: niceContactName(name, "tg", phone), phone, channel: "tg", unread: 0, msgs: [], ext }; s.chats.unshift(c); }
       c.msgs.push({ id: uid("m"), ts: ts ?? now(), out: true, text });
+      trimChat(c);
       if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)} (с телефона): ${text}`, s.currentUserId);
     });
   },
@@ -940,6 +949,7 @@ export const A = {
       const lastTs = c.msgs.length ? c.msgs[c.msgs.length - 1].ts : 0;
       let added = 0;
       for (const m of msgs) if (m.ts > lastTs) { c.msgs.push({ id: uid("m"), ts: m.ts, out: m.out, text: m.text }); if (!m.out) added++; }
+      trimChat(c);
       // непрочитанные не раздуваем при периодической ресинхронизации: при создании берём счётчик Telegram, дальше растим только на реально добавленные входящие
       if (isNew) c.unread = s.activeChatId === c.id ? 0 : unread;
       else if (added && s.activeChatId !== c.id) c.unread += added;
@@ -1007,7 +1017,7 @@ export const A = {
   },
   tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
   tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
-  tplDelete(id: string) { mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); },
+  tplDelete(id: string) { pushHistory("удаление шаблона"); mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); toast("Шаблон удалён — Ctrl+Z вернёт"); },
   // ---------- автоматизации ----------
   ruleAdd(rule: Omit<Rule, "id" | "fired">): string {
     const id = uid("rule");
@@ -1018,7 +1028,7 @@ export const A = {
     mut(s => { const r = s.automations.find(x => x.id === id); if (r) Object.assign(r, patch); });
   },
   ruleToggle(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.enabled = !r.enabled; }); },
-  ruleDelete(id: string) { mut(s => { s.automations = s.automations.filter(x => x.id !== id); }); },
+  ruleDelete(id: string) { pushHistory("удаление правила"); mut(s => { s.automations = s.automations.filter(x => x.id !== id); }); toast("Правило удалено — Ctrl+Z вернёт"); },
   ruleFired(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.fired++; }); },
   goto(page: string) { mut(s => { s.nav = { page, tick: (s.nav?.tick ?? 0) + 1 }; }); },
 
