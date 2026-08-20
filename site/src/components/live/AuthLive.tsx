@@ -1,7 +1,7 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
-import { useEffect, useState } from "react";
-import { useApp, setAuthStage } from "@/lib/store";
-import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember } from "@/lib/cloud";
+import { useEffect, useMemo, useState } from "react";
+import { useApp, setAuthStage, getState } from "@/lib/store";
+import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere } from "@/lib/cloud";
 import { plural } from "@/lib/model";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -213,9 +213,51 @@ export function TeamLive() {
           Приглашает сотрудников владелец пространства — код есть только у него.
         </p>
       )}
+      <MoveBackup />
       <Button variant="outline" size="sm" className="mt-2.5 h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
         <LogOut className="size-3.5" /> Выйти из аккаунта
       </Button>
+    </div>
+  );
+}
+
+// Перенести наработанное в ЭТО пространство. Раньше перенос жил только внутри создания
+// пространства: кто сначала вошёл в облако, а потом вспомнил про базу на устройстве, забрать
+// её не мог никак. Показываем блок, только если в локальной копии правда есть не-примеры.
+function MoveBackup() {
+  const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const [done, setDone] = useState(false);
+  const w = useMemo(() => backupWeight(), [done]);
+  if (!w.any || done) return null;
+  const parts = [w.records && `${w.records} ${plural(w.records, "запись", "записи", "записей")}`,
+                 w.chats && `${w.chats} ${plural(w.chats, "диалог", "диалога", "диалогов")}`,
+                 w.tasks && `${w.tasks} ${plural(w.tasks, "задача", "задачи", "задач")}`].filter(Boolean).join(" · ");
+  return (
+    <div className="mt-2.5 rounded-md border border-dashed px-3 py-2.5">
+      <div className="text-[12px] font-medium">На этом устройстве осталась база</div>
+      <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+        {parts} — они не в облаке. Могу перенести сюда: примеры не поедут, копия на устройстве останется.
+        Записи станут общими для команды.
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {armed ? (
+          <>
+            <span className="text-[11px] text-muted-foreground">Перенести в «{getState().wsName}»?</span>
+            <Button size="sm" className="h-7 text-[11.5px]" disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                const bad = await moveBackupHere();
+                setBusy(false); setArmed(false);
+                if (bad) toast.error("Перенести не вышло: " + bad, { duration: 15000, description: "Данные остались на устройстве, ничего не потеряно." });
+                else setDone(true);
+              }}>{busy ? "Переношу…" : "да, перенести"}</Button>
+            <Button variant="outline" size="sm" className="h-7 text-[11.5px]" disabled={busy} onClick={() => setArmed(false)}>нет</Button>
+          </>
+        ) : (
+          <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => setArmed(true)}>Перенести базу сюда</Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
@@ -136,11 +136,48 @@ export function localWeight(): { records: number; chats: number; tasks: number; 
   return { records, chats, tasks, any: records + chats + tasks > 0 };
 }
 
+/** То, из чего берём перенос: либо текущее состояние, либо локальная копия из браузера. */
+type Src = { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[] };
+
+/** Сколько своего лежит в локальной копии — той, что осталась в браузере после переезда. */
+export function backupWeight(): { records: number; chats: number; tasks: number; any: boolean } {
+  const b = localBackup();
+  if (!b) return { records: 0, chats: 0, tasks: 0, any: false };
+  const records = b.records.filter(r => !r.demo).length;
+  const chats = b.chats.filter(c => !c.demo).length;
+  const tasks = b.tasks.filter(t => !t.demo).length;
+  return { records, chats, tasks, any: records + chats + tasks > 0 };
+}
+
+/** Перенести локальную копию в ПРОСТРАНСТВО, В КОТОРОМ МЫ УЖЕ РАБОТАЕМ.
+    Раньше перенос был только внутри создания пространства: если человек сначала вошёл в облако,
+    а потом вспомнил про наработанное — забрать его было нечем, и оно оставалось на устройстве
+    навсегда. Структуру чужого пространства не трогаем: кладём только записи, задачи, диалоги
+    и историю. Повторный запуск безопасен — строки идут upsert-ом по тем же id. */
+export async function moveBackupHere(): Promise<string | null> {
+  const s = getState();
+  if (s.mode !== "cloud" || !wsId) return "Перенос возможен только в облачном пространстве";
+  const b = localBackup();
+  if (!b) return "Локальной копии в этом браузере нет";
+  const w = backupWeight();
+  if (!w.any) return "В локальной копии нет ничего, кроме примеров";
+  const u = (await supa.auth.getUser()).data.user;
+  if (!u) return "Сессия истекла — войдите заново";
+  // структуру берём из ТЕКУЩЕГО пространства: разделы команды важнее разделов копии
+  const bad = await uploadLocal(wsId, u.id, { ...b, entities: s.entities, automations: s.automations, routes: s.routes });
+  if (bad) return bad;
+  await openWorkspace(wsId, u.id);          // перечитываем — записи должны появиться на экране
+  toast.success("База перенесена в это пространство", {
+    description: `${w.records} записей · ${w.chats} диалогов · ${w.tasks} задач. Копия осталась и на этом устройстве.`,
+  });
+  return null;
+}
+
 /** Перенос накопленного локально в только что созданное пространство.
     Делается ДО первой загрузки — тогда человек сразу видит свои данные уже в облаке.
     Раньше вход в облако просто подменял состояние, и работа месяцами пропадала с экрана. */
-async function uploadLocal(newWs: string, meId: string): Promise<string | null> {
-  const s = getState();
+async function uploadLocal(newWs: string, meId: string, src?: Src): Promise<string | null> {
+  const s = src ?? getState();
   const keepRec = s.records.filter(r => !r.demo);
   const ids = new Set(keepRec.map(r => r.id));
   const keepTasks = s.tasks.filter(t => !t.demo && (!t.recordId || ids.has(t.recordId)));
@@ -186,7 +223,16 @@ export async function createWs(wsName: string, displayName: string, moveLocal = 
   if (moveLocal) {
     const weight = localWeight();
     const bad = await uploadLocal(newWs, u?.id ?? "");
-    if (bad) return "Пространство создано, но перенести базу не вышло — " + bad + ". Данные остались на этом устройстве, ничего не потеряно.";
+    // Раньше здесь человек оставался в окне входа с созданным, но пустым пространством —
+    // и повторить перенос было НЕЧЕМ. Теперь заводим внутрь: там есть кнопка «перенести сюда».
+    if (bad) {
+      if (u) await openWorkspace(newWs, u.id);
+      queueMicrotask(() => toast.error("Пространство создано, но база не переехала — " + bad, {
+        duration: 20000,
+        description: "Данные остались на этом устройстве, ничего не потеряно. Повторить: Настройки → «Перенести базу сюда».",
+      }));
+      return null;
+    }
     if (weight.any) queueMicrotask(() => toast.success("База перенесена в облако", {
       description: `${weight.records} записей · ${weight.chats} диалогов · ${weight.tasks} задач. Копия осталась и на этом устройстве.`,
     }));

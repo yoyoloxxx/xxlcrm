@@ -221,6 +221,11 @@ export function ensureBdayField(entities: EntityCfg[]) {
     c.fields.push({ id: "bday", label: "День рождения", type: "date", inTable: false });
   }
 }
+/** Локальная копия базы: она остаётся в браузере и после переезда в облако.
+    Нужна, чтобы наработанное можно было перенести в УЖЕ существующее пространство —
+    раньше перенос жил только внутри создания пространства, и работа зависала на устройстве. */
+export function localBackup(): DataState | null { return persistence.load(); }
+
 const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), routes: defaultRoutes(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
