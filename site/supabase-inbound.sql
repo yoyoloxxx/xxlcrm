@@ -1,4 +1,4 @@
--- XXLcrm · серверный приём заявок (v0.16). Запускается один раз в SQL Editor после supabase-init.sql.
+-- XXLcrm · серверный приём заявок (v0.18). Запускается один раз в SQL Editor после supabase-init.sql.
 -- Смысл: сообщения и заявки приходят на сервер, а не в открытую вкладку браузера.
 
 -- Секреты вебхуков: по одному на пространство и источник. Клиент их создаёт, функция сверяет.
@@ -39,6 +39,13 @@ create unique index if not exists inbound_dedup on public.inbound (workspace_id,
 -- схеме, из-за чего серверная функция падала на запросе и заявки молча терялись.
 alter table public.ws_config add column if not exists automations jsonb;
 
+-- Участник мог назначить себя владельцем: политика на UPDATE не проверяла, ЧТО он пишет.
+-- Своё имя менять можно, роль — нет.
+drop policy if exists mem_update_self on public.members;
+create policy mem_update_self on public.members for update
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid() and role = (select m.role from public.members m where m.user_id = auth.uid() and m.workspace_id = members.workspace_id));
+
 -- Дозапись сообщения в диалог на стороне базы. Раньше сервер читал весь массив msgs,
 -- дописывал и клал обратно: два сообщения, пришедшие одновременно, затирали друг друга.
 create or replace function public.chat_append_msg(p_chat text, p_msg jsonb)
@@ -73,9 +80,16 @@ grant execute on function public.chat_append_msg(text, jsonb) to service_role;
 alter table public.channel_hooks enable row level security;
 alter table public.inbound enable row level security;
 
+-- Токен бота и секрет приёмника — это доступ к переписке с клиентами и право слать
+-- заявки в CRM. Рядовому участнику они не нужны: оставляем их только владельцу.
+create or replace function public.is_owner(ws uuid) returns boolean
+language sql stable security definer set search_path = public as
+$$ select exists (select 1 from workspaces w where w.id = ws and w.owner_id = auth.uid()); $$;
+
 drop policy if exists hooks_all on public.channel_hooks;
-create policy hooks_all on public.channel_hooks for all
-  using (public.is_member(workspace_id)) with check (public.is_member(workspace_id));
+drop policy if exists hooks_owner on public.channel_hooks;
+create policy hooks_owner on public.channel_hooks for all
+  using (public.is_owner(workspace_id)) with check (public.is_owner(workspace_id));
 
 drop policy if exists inbound_all on public.inbound;
 create policy inbound_all on public.inbound for all

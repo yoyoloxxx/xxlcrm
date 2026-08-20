@@ -24,6 +24,7 @@ import { cloudBoot, renameWs } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
 import { PresetPicker } from "@/components/live/PresetPicker";
+import { cloudState } from "@/lib/cloud";
 import { setupMarks, markSetup } from "@/lib/setup";
 import { EntIcon } from "@/components/live/icons";
 import { TasksLive } from "@/components/live/TasksLive";
@@ -178,7 +179,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.22</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.23</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -268,7 +269,9 @@ export default function App() {
           <button onClick={() => setPage("settings")} className="press mr-1 hidden items-center gap-1.5 rounded-md px-1.5 py-1 sm:flex"
             title={s.mode === "cloud" ? `Общее пространство «${s.wsName}»: данные видит вся команда и они одинаковы на всех устройствах` : "Данные лежат только в этом браузере. Включите общее пространство — и они будут на всех устройствах и у команды"}>
             <span className={cn("size-1.5 rounded-full", s.mode === "cloud" && "pulse-dot")} style={{ background: s.mode === "cloud" ? "hsl(var(--brass))" : "hsl(var(--muted-foreground))" }} />
-            <span className="font-mono2 text-[10.5px] text-muted-foreground">{s.mode === "cloud" ? "облако · синхронно" : "только это устройство"}</span>
+            <span className={cn("font-mono2 text-[10.5px]", s.mode === "cloud" && cloudState().broken ? "font-medium text-destructive" : "text-muted-foreground")}>
+              {s.mode === "cloud" ? (cloudState().broken ? "облако · НЕ сохраняется" : "облако · синхронно") : "только это устройство"}
+            </span>
           </button>
           <button
             onClick={() => setTheme(t => (t === "light" ? "dark" : "light"))}
@@ -319,7 +322,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.22 · даты не калечатся и не теряются, день рождения двигает напоминание, серверный приём не глотает ошибки</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.23 · секреты не утекают, копия базы без ключей, облако не подменяет структуру команды заводской</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>

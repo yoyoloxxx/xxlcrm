@@ -133,8 +133,8 @@ function ServerIntake({ on, cloud, onChange }: { on: boolean; cloud: boolean; on
         <span className="block text-[12px] font-medium">Приём на сервере{on ? " — включён" : ""}</span>
         <span className="block text-[11px] leading-snug text-muted-foreground">
           {!cloud ? "Нужно общее пространство: войдите в аккаунт, тогда заявки будут приходить и при закрытом браузере"
-            : on ? "Сообщения идут на наш сервер и становятся заявками, даже когда браузер закрыт"
-            : "Сейчас канал читается из этой вкладки: закрыли браузер — сообщения ждут"}
+            : on ? "Сообщения идут на сервер и становятся заявками, даже когда браузер закрыт. Токен канала при этом лежит в базе пространства — его видят участники"
+            : "Сейчас канал читается из этой вкладки: закрыли браузер — сообщения ждут. При включении токен уедет в общую базу пространства"}
         </span>
       </span>
       <Switch checked={on} disabled={!cloud} onCheckedChange={onChange} />
@@ -209,7 +209,9 @@ export function IntegrationsLive() {
         <Plug className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Интеграции: реальные каналы
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-        Работают прямо из браузера, токены и сессии хранятся только на этом компьютере. Личные аккаунты подключаются по рабочему номеру: Telegram — входом как в приложении, WhatsApp — по QR.
+        Работают прямо из браузера, токены и сессии хранятся на этом компьютере. Личные аккаунты подключаются по рабочему номеру: Telegram — входом как в приложении, WhatsApp — по QR.
+        {" "}<b className="font-medium text-foreground">Исключение:</b> если включить «Приём на сервере», токен бота уезжает в общую базу пространства —
+        иначе сервер не сможет принимать сообщения при закрытом браузере. Значит, его увидят и другие участники: пускайте в пространство только своих.
       </p>
 
       <TgUserCard />
@@ -318,7 +320,15 @@ function BackupCard() {
   const st = storageState();
   const pct = Math.min(100, Math.round((st.bytes / 4_300_000) * 100));
   const dump = () => {
-    const blob = new Blob([window.localStorage.getItem("xxlcrm-site-v1") ?? "{}"], { type: "application/json" });
+    // Ключи каналов, токен бота и сессия личного Telegram в файл НЕ попадают: копию базы
+    // пересылают и кладут в облака, а это доступ к переписке с клиентами.
+    let text = window.localStorage.getItem("xxlcrm-site-v1") ?? "{}";
+    try {
+      const d = JSON.parse(text) as Record<string, unknown>;
+      delete d.integrations;
+      text = JSON.stringify(d);
+    } catch { /* не разобрали — отдаём как есть */ }
+    const blob = new Blob([text], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     const d = new Date();
@@ -350,6 +360,10 @@ function BackupCard() {
       <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
         Пока вы работаете «только на этом устройстве», вся база лежит в браузере. Скачайте копию перед чисткой кэша,
         переустановкой системы или большим импортом — файл потом загружается обратно сюда же.
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+        В файле — записи, задачи и переписка. Ключи каналов и вход в личный Telegram в копию не кладу:
+        такой файл часто пересылают, а это был бы доступ к вашим клиентам. После загрузки копии каналы подключаются заново.
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button className="h-9 gap-1.5" onClick={dump}>Скачать копию</Button>

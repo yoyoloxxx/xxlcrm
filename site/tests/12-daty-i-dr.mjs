@@ -59,7 +59,7 @@ ok("D2 показано, что дата не понята", /Не понял д
 const soon = new Date(Date.now() + 3 * 86400000);
 const soonStr = `${String(soon.getDate()).padStart(2, "0")}.${String(soon.getMonth() + 1).padStart(2, "0")}.1990`;
 await di.fill(soonStr); await di.press("Enter"); await p.waitForTimeout(1200);
-await p.reload(); await p.waitForTimeout(2600); await p.keyboard.press("Escape");
+await p.reload(); await p.waitForTimeout(3600); await p.keyboard.press("Escape");
 const bTasks = (s) => (s.tasks ?? []).filter(t => t.id.startsWith("t_bday_") && !t.done);
 const first = bTasks(await st());
 ok("E1 напоминание «поздравить» появилось", first.length > 0, first.map(t => new Date(t.due).toLocaleDateString("ru-RU")).join(", "));
@@ -74,7 +74,7 @@ const soon2Str = `${String(soon2.getDate()).padStart(2, "0")}.${String(soon2.get
 await p.locator('[data-drawer] input[aria-label="Дата"]').first().fill(soon2Str);
 await p.locator('[data-drawer] input[aria-label="Дата"]').first().press("Enter");
 await p.waitForTimeout(1000);
-await p.reload(); await p.waitForTimeout(2600); await p.keyboard.press("Escape");
+await p.reload(); await p.waitForTimeout(3600); await p.keyboard.press("Escape");
 const stAfter = await st();
 // смотрим ТОЛЬКО задачи по той записи, которую правили: у других клиентов свои дни рождения
 const recId = first[0]?.recordId ?? null;

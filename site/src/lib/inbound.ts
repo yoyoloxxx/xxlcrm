@@ -26,11 +26,24 @@ const rnd = () => (crypto.randomUUID?.() ?? String(Math.random())).replace(/-/g,
 export async function ensureHookSecret(source: InboundSource): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;
-  const { data } = await supa.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", source).maybeSingle();
+  // Сорвавшийся запрос НЕ повод выписывать новый секрет: старый продолжает работать в
+  // Telegram и в опубликованной на сайте форме, а перевыпуск ломает их обоих молча.
+  const { data, error: readErr } = await supa.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", source).maybeSingle();
+  if (readErr) {
+    toast.error("Не удалось прочитать настройки приёмника", {
+      description: "Ничего не меняю, чтобы не сломать работающий вебхук. Если вы не владелец пространства — настройка каналов доступна только ему.",
+    });
+    return null;
+  }
   if (data?.secret) return String(data.secret);
   const secret = rnd();
   const { error } = await supa.from("channel_hooks").upsert({ workspace_id: ws, source, secret });
-  if (error) { toast.error("Не удалось создать приёмник: " + error.message.slice(0, 80)); return null; }
+  if (error) {
+    toast.error("Не удалось создать приёмник", {
+      description: /policy|permission|denied/i.test(error.message) ? "Каналы настраивает владелец пространства" : error.message.slice(0, 90),
+    });
+    return null;
+  }
   return secret;
 }
 

@@ -15,6 +15,11 @@ let channel: RealtimeChannel | null = null;
 
 // снимки последнего сохранённого состояния: id → канонический JSON модели (для диффа и гашения эха)
 let cfgSnap = ""; // канон структуры и правил (ws_config: entities + automations)
+let cfgSeen = 0;  // updated_at конфига, который мы видели последним — чтобы не затирать чужое
+let cloudBroken = false;
+/** Что показывать в шапке: «синхронно» — только когда это правда. */
+export const cloudState = () => ({ broken: cloudBroken });
+const bump = () => applyRemote(() => { /* только перерисовать шапку */ });
 let cfgHasAutomations = true; // колонка automations может ещё не существовать — деградируем мягко
 
 // В колонке ws_config.automations лежит либо старый массив правил, либо новый объект {rules, routes}:
@@ -144,8 +149,17 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
     supa.from("workspaces").select("name, invite_code").eq("id", id).single(),
     supa.from("ws_config").select("*").eq("workspace_id", id).maybeSingle(),
   ]);
-  const err = recs.error ?? tasks.error ?? acts.error ?? chats.error ?? tpls.error ?? mems.error ?? wss.error;
-  if (err) { toast.error("Не удалось загрузить пространство: " + err.message.slice(0, 100)); return; }
+  // ВАЖНО: ошибка ЛЮБОГО из запросов — повод не входить вовсе. Раньше отказ по одному только
+  // ws_config пропускался: структура подменялась заводской, записи команды пропадали с экрана,
+  // а следом эта заводская структура затирала настоящую в базе.
+  const err = recs.error ?? tasks.error ?? acts.error ?? chats.error ?? tpls.error ?? mems.error ?? wss.error ?? cfg.error;
+  if (err) {
+    toast.error("Не удалось загрузить пространство", {
+      duration: 20000,
+      description: err.message.slice(0, 120) + " · ничего не меняю, попробуйте войти ещё раз",
+    });
+    return;
+  }
 
   const cfgEnts = (cfg.data?.entities as EntityCfg[] | null) ?? null;
   const cfgAuto = ((cfg.data as Row | null)?.automations as AutoCol) ?? null;
@@ -167,7 +181,14 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
 
   // снимки для диффа
   cfgSnap = canon({ e: data.entities, a: data.automations, r: data.routes });
-  if (!cfgEnts?.length || !cfgRules || !cfgRoutes) await saveCfg(id, data.entities, data.automations, data.routes);
+  cfgSeen = Number((cfg.data as Row | null)?.updated_at ?? 0);
+  // Заводскую структуру записываем в базу ТОЛЬКО если её там правда нет (первый вход),
+  // а не потому, что запрос не прошёл: это стирало настройку всей команды.
+  const cfgRowExists = !!cfg.data;
+  if (!cfgRowExists || !cfgEnts?.length || !cfgRules || !cfgRoutes) {
+    try { await saveCfg(id, data.entities, data.automations, data.routes); }
+    catch (e) { toast.error("Настройки пространства не сохранились", { description: String((e as Error).message).slice(0, 120) }); }
+  }
   snap.records = new Map(data.records.map(r => [r.id, canon(r)]));
   snap.tasks = new Map(data.tasks.map(t => [t.id, canon(t)]));
   snap.activities = new Map(data.activities.map(a => [a.id, canon(a)]));
@@ -183,13 +204,31 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
 
 // сохранить конфиг пространства; если колонки automations ещё нет в базе — сохраняем без неё
 async function saveCfg(id: string, entities: EntityCfg[], automations: Rule[], routes: Route[]): Promise<void> {
+  // Конфиг пишется целиком, поэтому перед записью смотрим, не изменил ли его коллега:
+  // раньше обычное создание заявки затирало поле, которое кто-то добавил минуту назад.
+  const { data: cur, error: curErr } = await supa.from("ws_config").select("updated_at").eq("workspace_id", id).maybeSingle();
+  if (!curErr && cur && Number(cur.updated_at ?? 0) > cfgSeen) {
+    const fresh = await supa.from("ws_config").select("*").eq("workspace_id", id).maybeSingle();
+    if (!fresh.error && fresh.data) {
+      const remoteEnts = (fresh.data.entities as EntityCfg[] | null) ?? null;
+      if (remoteEnts?.length) {
+        cfgSeen = Number(fresh.data.updated_at ?? 0);
+        applyRemote(st2 => { st2.entities = remoteEnts; });
+        cfgSnap = canon({ e: remoteEnts, a: automations, r: routes });
+        toast("Структуру разделов обновил коллега — забрал его версию", { description: "Ваши правки структуры примените ещё раз" });
+        return;
+      }
+    }
+  }
+  const stamp = Date.now();
+  cfgSeen = stamp;
   if (cfgHasAutomations) {
-    const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, automations: autoCol(automations, routes), updated_at: Date.now() });
+    const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, automations: autoCol(automations, routes), updated_at: stamp });
     if (!error) return;
     if (/automations/i.test(error.message)) cfgHasAutomations = false; // колонка не создана — падаем на entities-only
     else throw new Error("ws_config: " + error.message);
   }
-  const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, updated_at: Date.now() });
+  const { error } = await supa.from("ws_config").upsert({ workspace_id: id, entities, updated_at: stamp });
   if (error) throw new Error("ws_config: " + error.message);
 }
 
@@ -217,6 +256,9 @@ async function doSave(): Promise<void> {
       { table: "chats", items: st.chats, toRow: M.chats.toRow as (x: never) => Row },
       { table: "reply_templates", items: st.replyTemplates, toRow: M.reply_templates.toRow as (x: never) => Row },
     ];
+    // Одна непроходящая таблица не должна останавливать сохранение остальных: раньше
+    // единственная плохая строка навсегда замораживала запись всей работы.
+    const problems: string[] = [];
     for (const c of collections) {
       const seen = new Set<string>();
       const changed: { id: string; j: string; row: Row }[] = [];
@@ -228,16 +270,19 @@ async function doSave(): Promise<void> {
       const deletes = [...snap[c.table].keys()].filter(id => !seen.has(id));
       if (changed.length) {
         const { error } = await supa.from(c.table).upsert(changed.map(x => x.row));
-        if (error) throw new Error(c.table + ": " + error.message);
-        for (const x of changed) snap[c.table].set(x.id, x.j);
+        if (error) problems.push(c.table + ": " + error.message);
+        else for (const x of changed) snap[c.table].set(x.id, x.j);
       }
       if (deletes.length) {
         const { error } = await supa.from(c.table).delete().in("id", deletes);
-        if (error) throw new Error(c.table + ": " + error.message);
-        for (const id of deletes) snap[c.table].delete(id);
+        if (error) problems.push(c.table + " (удаление): " + error.message);
+        else for (const id of deletes) snap[c.table].delete(id);
       }
     }
+    if (problems.length) throw new Error(problems.join(" · "));
+    if (cloudBroken) { cloudBroken = false; bump(); }
   } catch (err) {
+    if (!cloudBroken) { cloudBroken = true; bump(); }
     // Раньше здесь стояло «Изменения сохранены локально» — неправда: в облачном режиме
     // локальной копии нет, и человек, закрыв вкладку, терял работу, считая её сохранённой.
     toast.error("Изменения НЕ сохранены: " + String((err as Error).message).slice(0, 80), {
