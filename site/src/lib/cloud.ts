@@ -54,8 +54,10 @@ const M = {
     fromRow: (w: Row): Task => ({ id: String(w.id), title: String(w.title ?? ""), kind: (w.kind as Task["kind"]) ?? "todo", recordId: (w.record_id as string) ?? undefined, ownerId: String(w.owner_id ?? ""), due: num(w.due) ?? 0, done: !!w.done, doneAt: num(w.done_at) }),
   },
   activities: {
-    toRow: (a: Activity): Row => ({ id: a.id, workspace_id: wsId, record_id: a.recordId, ts: a.ts, kind: a.kind, text: a.text, user_id: a.userId ?? null }),
-    fromRow: (w: Row): Activity => ({ id: String(w.id), recordId: String(w.record_id), ts: num(w.ts) ?? 0, kind: (w.kind as Activity["kind"]) ?? "comment", text: String(w.text ?? ""), userId: (w.user_id as string) ?? undefined }),
+    // edit_key раньше терялся по дороге в облако — и задача от правила, которую человек
+    // удалил, возвращалась каждый час, потому что метка «уже ставили» не доезжала
+    toRow: (a: Activity): Row => ({ id: a.id, workspace_id: wsId, record_id: a.recordId, ts: a.ts, kind: a.kind, text: a.text, user_id: a.userId ?? null, edit_key: a.editKey ?? null }),
+    fromRow: (w: Row): Activity => ({ id: String(w.id), recordId: String(w.record_id), ts: num(w.ts) ?? 0, kind: (w.kind as Activity["kind"]) ?? "comment", text: String(w.text ?? ""), userId: (w.user_id as string) ?? undefined, editKey: (w.edit_key as string) ?? undefined }),
   },
   chats: {
     toRow: (c: Chat): Row => ({ id: c.id, workspace_id: wsId, name: c.name, phone: c.phone ?? null, channel: c.channel, record_id: c.recordId ?? null, unread: c.unread, ext: c.ext ?? null, msgs: c.msgs.slice(-500), updated_at: Date.now() }),
@@ -117,13 +119,70 @@ async function afterLogin(): Promise<void> {
   await openWorkspace(String(data[0].workspace_id), u.id);
 }
 
-export async function createWs(wsName: string, displayName: string): Promise<string | null> {
+/** Сколько в локальной базе НЕ демо — чтобы спросить человека ДО перехода, а не после. */
+export function localWeight(): { records: number; chats: number; tasks: number; any: boolean } {
+  const s = getState();
+  const records = s.records.filter(r => !r.demo).length;
+  const chats = s.chats.filter(c => !c.demo).length;
+  const tasks = s.tasks.filter(t => !t.demo).length;
+  return { records, chats, tasks, any: records + chats + tasks > 0 };
+}
+
+/** Перенос накопленного локально в только что созданное пространство.
+    Делается ДО первой загрузки — тогда человек сразу видит свои данные уже в облаке.
+    Раньше вход в облако просто подменял состояние, и работа месяцами пропадала с экрана. */
+async function uploadLocal(newWs: string, meId: string): Promise<string | null> {
+  const s = getState();
+  const keepRec = s.records.filter(r => !r.demo);
+  const ids = new Set(keepRec.map(r => r.id));
+  const keepTasks = s.tasks.filter(t => !t.demo && (!t.recordId || ids.has(t.recordId)));
+  const keepChats = s.chats.filter(c => !c.demo);
+  const keepActs = s.activities.filter(a => ids.has(a.recordId));
+  if (!keepRec.length && !keepChats.length && !keepTasks.length) return null;
+
+  wsId = newWs;                                  // мапперы кладут workspace_id из этой переменной
+  // Локальные id сотрудников («u1», «u2») в облаке ничего не значат: всё становится вашим,
+  // а команду вы позовёте потом и раздадите ответственных заново.
+  const rec = keepRec.map(r => ({ ...M.records.toRow(r), owner_id: meId }));
+  const tsk = keepTasks.map(t => ({ ...M.tasks.toRow(t), owner_id: meId }));
+  const act = keepActs.map(a => ({ ...M.activities.toRow(a), user_id: meId }));
+  const cht = keepChats.map(c => M.chats.toRow({ ...c, recordId: c.recordId && ids.has(c.recordId) ? c.recordId : undefined }));
+
+  const push = async (table: string, rows: Row[]): Promise<string | null> => {
+    for (let i = 0; i < rows.length; i += 300) {
+      const { error } = await supa.from(table).upsert(rows.slice(i, i + 300));
+      if (error) return `${table}: ${error.message}`;
+    }
+    return null;
+  };
+  // структура — первой: без неё записи не на что положить
+  const cfg = await supa.from("ws_config").upsert({
+    workspace_id: newWs, entities: s.entities, automations: autoCol(s.automations, s.routes), updated_at: Date.now(),
+  });
+  if (cfg.error && !/automations/i.test(cfg.error.message)) return "структура: " + cfg.error.message;
+  if (cfg.error) {
+    const retry = await supa.from("ws_config").upsert({ workspace_id: newWs, entities: s.entities, updated_at: Date.now() });
+    if (retry.error) return "структура: " + retry.error.message;
+  }
+  return (await push("records", rec)) ?? (await push("tasks", tsk))
+      ?? (await push("activities", act)) ?? (await push("chats", cht));
+}
+
+export async function createWs(wsName: string, displayName: string, moveLocal = false): Promise<string | null> {
   const { data, error } = await supa.rpc("create_workspace", { ws_name: wsName, display_name: displayName });
   if (error) return ruAuthErr(error.message);
   const newWs = String(data);
   // стартовые шаблоны ответов — сразу в общую базу
   await supa.from("reply_templates").insert(DEFAULT_TEMPLATES.map(t => ({ id: uid("tpl"), workspace_id: newWs, name: t.name, text: t.text })));
   const u = (await supa.auth.getUser()).data.user;
+  if (moveLocal) {
+    const weight = localWeight();
+    const bad = await uploadLocal(newWs, u?.id ?? "");
+    if (bad) return "Пространство создано, но перенести базу не вышло — " + bad + ". Данные остались на этом устройстве, ничего не потеряно.";
+    if (weight.any) queueMicrotask(() => toast.success("База перенесена в облако", {
+      description: `${weight.records} записей · ${weight.chats} диалогов · ${weight.tasks} задач. Копия осталась и на этом устройстве.`,
+    }));
+  }
   if (u) await openWorkspace(newWs, u.id);
   return null;
 }
@@ -134,6 +193,42 @@ export async function joinWs(code: string, displayName: string): Promise<string 
   const u = (await supa.auth.getUser()).data.user;
   if (u) await openWorkspace(String(data), u.id);
   return null;
+}
+
+/** Я ли владелец этого пространства. Код приглашения и управление командой — только ему. */
+export function iAmOwner(): boolean {
+  const s = getState();
+  return s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
+}
+
+/** Перевыпуск кода приглашения: старый перестаёт работать. Нужен, когда код разошёлся
+    по чатам или сотрудник ушёл — иначе он остаётся вечным ключом ко всей базе. */
+export async function rotateInvite(): Promise<string | null> {
+  const s = getState();
+  if (!s.wsId) return null;
+  const code = Array.from({ length: 8 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
+  const { error } = await supa.from("workspaces").update({ invite_code: code }).eq("id", s.wsId);
+  if (error) {
+    toast.error("Не удалось перевыпустить код", { description: /policy|denied|permission/i.test(error.message) ? "Это может только владелец пространства" : error.message.slice(0, 90) });
+    return null;
+  }
+  setWsMeta(s.wsName, code);
+  toast.success("Код приглашения перевыпущен", { description: "Старый больше не работает" });
+  return code;
+}
+
+/** Убрать сотрудника из пространства. Его записи остаются — уходит только доступ. */
+export async function removeMember(userId: string): Promise<boolean> {
+  const s = getState();
+  if (!s.wsId) return false;
+  const { error } = await supa.from("members").delete().eq("workspace_id", s.wsId).eq("user_id", userId);
+  if (error) {
+    toast.error("Не удалось убрать сотрудника", { description: /policy|denied|permission/i.test(error.message) ? "Это может только владелец" : error.message.slice(0, 90) });
+    return false;
+  }
+  applyRemote(st2 => { st2.users = st2.users.filter(u => u.id !== userId); });
+  toast("Сотрудник убран из пространства", { description: "Его записи и переписка остались на месте" });
+  return true;
 }
 
 // ---------- загрузка пространства ----------

@@ -185,7 +185,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.26</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.27</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -276,7 +276,7 @@ export default function App() {
             title={s.mode === "cloud" ? `Общее пространство «${s.wsName}»: данные видит вся команда и они одинаковы на всех устройствах` : "Данные лежат только в этом браузере. Включите общее пространство — и они будут на всех устройствах и у команды"}>
             <span className={cn("size-1.5 rounded-full", s.mode === "cloud" && "pulse-dot")} style={{ background: s.mode === "cloud" ? "hsl(var(--brass))" : "hsl(var(--muted-foreground))" }} />
             <span className={cn("font-mono2 text-[10.5px]", s.mode === "cloud" && cloudState().broken ? "font-medium text-destructive" : "text-muted-foreground")}>
-              {s.mode === "cloud" ? (cloudState().broken ? "облако · НЕ сохраняется" : "облако · синхронно") : "только это устройство"}
+              {s.mode === "cloud" ? (cloudState().broken ? "облако · НЕ сохраняется" : "облако · синхронно") : "демо · только это устройство"}
             </span>
           </button>
           <button
@@ -328,7 +328,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.26 · недоставленное сообщение видно, вкладка не отпускает несохранённое, секрет приёмника перевыпускается</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.27 · база переезжает в облако вместе с вами, код приглашения только у владельца, сотрудника можно убрать</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -685,6 +685,23 @@ function StorageAlarm() {
         <button onClick={tabTakeOver}
           className="press ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 text-[11.5px] text-destructive hover:bg-destructive/5">
           Работать здесь
+        </button>
+      </div>
+    );
+  }
+  // Локальный режим — витрина. Когда в нём накапливается настоящая база, честно говорим,
+  // что она живёт в одном браузере и упрётся в его потолок.
+  if (!st.broken && app.mode === "local" && st.bytes > 1_500_000) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2" style={{ background: "hsl(var(--brass) / 0.12)" }}>
+        <TriangleAlert className="size-4 shrink-0" style={{ color: "var(--brass-ink)" }} />
+        <span className="text-[12px] leading-snug" style={{ color: "var(--brass-ink)" }}>
+          База выросла до {Math.round(st.bytes / 1e5) / 10} МБ и живёт только в этом браузере — потолок около 4 МБ.
+          Пора в общее пространство: перенесу всё как есть.
+        </span>
+        <button onClick={() => setAuthStage("auth")}
+          className="press ml-auto shrink-0 rounded-md border px-2 py-1 text-[11.5px]" style={{ borderColor: "var(--brass-ink)", color: "var(--brass-ink)" }}>
+          Перейти в облако
         </button>
       </div>
     );

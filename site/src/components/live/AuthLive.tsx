@@ -1,7 +1,9 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
 import { useEffect, useState } from "react";
 import { useApp, setAuthStage } from "@/lib/store";
-import { signIn, signUp, signOutCloud, createWs, joinWs } from "@/lib/cloud";
+import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember } from "@/lib/cloud";
+import { plural } from "@/lib/model";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -32,6 +34,8 @@ export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [move, setMove] = useState(true);   // по умолчанию переносим: терять наработанное — худший исход
+  const weight = localWeight();
 
   const run = async (fn: () => Promise<string | null>) => {
     setBusy(true); setErr("");
@@ -88,7 +92,21 @@ export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
               <div className="mt-2 flex flex-col gap-2">
                 <Input className="h-9 text-[12.5px]" placeholder="Название компании" value={wsName} onChange={e => setWsName(e.target.value)} />
                 <Input className="h-9 text-[12.5px]" placeholder="Ваше имя (видно команде)" value={myName} onChange={e => setMyName(e.target.value)} />
-                <Button className="h-9" disabled={busy || !myName.trim()} onClick={() => run(() => createWs(wsName, myName))}>{busy ? "Секунду…" : "Создать пространство"}</Button>
+                {weight.any && (
+                  <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-dashed p-2.5">
+                    <Switch checked={move} onCheckedChange={setMove} />
+                    <span className="min-w-0">
+                      <span className="block text-[12px] font-medium">Перенести то, что уже наработано</span>
+                      <span className="block text-[11px] leading-snug text-muted-foreground">
+                        {weight.records} {plural(weight.records, "запись", "записи", "записей")}
+                        {weight.chats ? `, ${weight.chats} ${plural(weight.chats, "диалог", "диалога", "диалогов")}` : ""}
+                        {weight.tasks ? `, ${weight.tasks} ${plural(weight.tasks, "задача", "задачи", "задач")}` : ""} — вместе с разделами и автоматизациями.
+                        Копия останется и на этом устройстве. Примеры не переношу.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                <Button className="h-9" disabled={busy || !myName.trim()} onClick={() => run(() => createWs(wsName, myName, move))}>{busy ? "Переношу…" : "Создать пространство"}</Button>
               </div>
             </div>
             <div className="rounded-md border border-dashed p-3.5">
@@ -99,6 +117,13 @@ export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
                 <Input className="h-9 flex-1 text-[12.5px]" placeholder="Ваше имя" value={myName} onChange={e => setMyName(e.target.value)} />
                 <Button variant="outline" className="h-9" disabled={busy || !code.trim() || !myName.trim()} onClick={() => run(() => joinWs(code, myName))}>Войти</Button>
               </div>
+              {weight.any && (
+                <p className="mt-2 text-[11px] leading-snug" style={{ color: "var(--brass-ink)" }}>
+                  У вас на устройстве {weight.records} {plural(weight.records, "запись", "записи", "записей")}. В ЧУЖОЕ пространство я их не переношу —
+                  там своя база, и мешать их нельзя. Локальная копия никуда не денется: если она нужна, сначала выгрузите её
+                  (Настройки → «Копия базы») или создайте своё пространство.
+                </p>
+              )}
             </div>
             {err && <p className="text-[12px] text-destructive">{err}</p>}
           </div>
@@ -110,22 +135,33 @@ export function AuthOverlay({ stage }: { stage: "auth" | "ws" }) {
 
 export function TeamLive() {
   const s = useApp();
+  const owner = iAmOwner();
+  const [shown, setShown] = useState(false);
+  const weight = localWeight();
 
   if (s.mode !== "cloud") {
     return (
-      <div className="flex items-center justify-between gap-3 px-4 py-3.5">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
+        <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold">Команда и аккаунт</div>
           <div className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">
-            Войдите — сделки, диалоги и задачи станут общими для команды и доступными с любого устройства
+            Сейчас вы работаете <b className="font-medium text-foreground">только на этом устройстве</b>: база лежит в браузере,
+            её не видно с телефона и с другого компьютера, а места в нём около 4 МБ — это несколько тысяч записей, дальше он откажет.
+            Так удобно посмотреть и настроить под себя. Для настоящей работы — общее пространство: там объём не ограничен,
+            заявки приходят при закрытом браузере, и всё видно команде.
           </div>
+          {weight.any && (
+            <div className="mt-1.5 text-[11.5px] leading-snug" style={{ color: "var(--brass-ink)" }}>
+              У вас уже {weight.records} {plural(weight.records, "своя запись", "своих записи", "своих записей")} — при переходе перенесу их с собой.
+            </div>
+          )}
         </div>
-        <Button size="sm" className="h-8 shrink-0 gap-1.5" onClick={() => setAuthStage("auth")}><LogIn className="size-3.5" /> Войти</Button>
+        <Button size="sm" className="h-8 shrink-0 gap-1.5" onClick={() => setAuthStage("auth")}><LogIn className="size-3.5" /> Перейти в облако</Button>
       </div>
     );
   }
 
-  const copyInvite = () => { navigator.clipboard?.writeText(s.inviteCode).then(() => toast("Код приглашения скопирован: " + s.inviteCode)); };
+  const copyInvite = () => { navigator.clipboard?.writeText(s.inviteCode).then(() => toast("Код приглашения скопирован")); };
 
   return (
     <div className="px-4 py-3.5">
@@ -143,19 +179,64 @@ export function TeamLive() {
               style={u.role === "Владелец" ? { background: "hsl(var(--brass) / 0.16)", borderColor: "hsl(var(--brass) / 0.5)", color: "var(--brass-ink)" } : undefined}>
               {u.role}
             </span>
+            {owner && u.id !== s.currentUserId && (
+              <RemoveMember id={u.id} name={u.name} />
+            )}
           </div>
         ))}
       </div>
-      <div className="mt-2.5 flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-medium">Пригласить сотрудника</div>
-          <div className="text-[11px] leading-snug text-muted-foreground">Он регистрируется и вводит код: <code className="font-mono2">{s.inviteCode}</code></div>
+      {/* Код приглашения — это ключ ко всей базе. Показываем его только владельцу и даём
+          перевыпустить: раньше он висел у всех на виду и не менялся никогда. */}
+      {owner ? (
+        <div className="mt-2.5 rounded-md border border-dashed px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-medium">Пригласить сотрудника</div>
+              <div className="text-[11px] leading-snug text-muted-foreground">
+                Он регистрируется и вводит код: <code className="font-mono2">{shown ? s.inviteCode : "••••••••"}</code>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => setShown(v => !v)}>{shown ? "Скрыть" : "Показать"}</Button>
+            <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={copyInvite}><Copy className="size-3.5" /> Код</Button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => { if (window.confirm("Перевыпустить код? Старый перестанет работать — тем, кто ещё не вступил, придётся дать новый.")) void rotateInvite(); }}>
+              Перевыпустить код
+            </Button>
+            <span className="text-[11px] leading-snug text-muted-foreground">
+              Код — это ключ ко всей базе. Разошёлся по чатам или ушёл сотрудник — перевыпустите.
+            </span>
+          </div>
         </div>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={copyInvite}><Copy className="size-3.5" /> Код</Button>
-      </div>
+      ) : (
+        <p className="mt-2.5 rounded-md border border-dashed px-3 py-2.5 text-[11px] leading-snug text-muted-foreground">
+          Приглашает сотрудников владелец пространства — код есть только у него.
+        </p>
+      )}
       <Button variant="outline" size="sm" className="mt-2.5 h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
         <LogOut className="size-3.5" /> Выйти из аккаунта
       </Button>
     </div>
+  );
+}
+
+// Убрать сотрудника — в два шага: доступ к базе отбирают не случайным кликом
+function RemoveMember({ id, name }: { id: string; name: string }) {
+  const [armed, setArmed] = useState(false);
+  if (!armed) {
+    return (
+      <button onClick={() => setArmed(true)} title={`Убрать ${name} из пространства`} aria-label={`Убрать ${name} из пространства`}
+        className="press shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:text-destructive focus-visible:text-destructive">
+        <X className="size-3.5" />
+      </button>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <span className="text-[10.5px] text-destructive">убрать?</span>
+      <button onClick={() => { void removeMember(id); setArmed(false); }}
+        className="press rounded border border-destructive/40 px-1.5 py-0.5 text-[10.5px] text-destructive hover:bg-destructive/5">да</button>
+      <button onClick={() => setArmed(false)} className="press rounded border px-1.5 py-0.5 text-[10.5px] text-muted-foreground">нет</button>
+    </span>
   );
 }
