@@ -56,7 +56,8 @@ create table if not exists public.activities (
   ts bigint not null,
   kind text not null,
   text text not null,
-  user_id text
+  user_id text,
+  edit_key text          -- серия правок одного поля схлопывается в одну строку истории
 );
 create index if not exists activities_ws on public.activities (workspace_id, record_id);
 

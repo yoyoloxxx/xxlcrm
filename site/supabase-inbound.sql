@@ -1,4 +1,4 @@
--- XXLcrm · серверный приём заявок (v0.18). Запускается один раз в SQL Editor после supabase-init.sql.
+-- XXLcrm · серверный приём заявок (v0.28). Запускается один раз в SQL Editor после supabase-init.sql.
 -- Смысл: сообщения и заявки приходят на сервер, а не в открытую вкладку браузера.
 
 -- Секреты вебхуков: по одному на пространство и источник. Клиент их создаёт, функция сверяет.
@@ -150,3 +150,10 @@ alter table public.inbound replica identity full;
 do $$ begin
   execute 'alter publication supabase_realtime add table public.inbound';
 exception when duplicate_object then null; end $$;
+
+-- v0.28 · колонка activities.edit_key.
+-- Клиент шлёт её с v0.27 (серия правок одного поля схлопывается в одну строку истории),
+-- а в схеме её не было — из-за этого падал ВЕСЬ перенос базы в облако и любая запись
+-- истории: PostgREST отвечал «Could not find the 'edit_key' column of 'activities'».
+alter table public.activities add column if not exists edit_key text;
+notify pgrst, 'reload schema';
