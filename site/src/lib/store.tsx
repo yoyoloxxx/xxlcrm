@@ -348,7 +348,20 @@ export function undo(): boolean {
 // ---------- селекторы ----------
 export const entityCfg = (id: string): EntityCfg => st.entities.find(e => e.id === id) ?? st.entities[0];
 export const allEntities = () => st.entities;
-export const recById = (id?: string | null) => st.records.find(r => r.id === id);
+// Указатель id → запись. Раньше каждый recById был проходом по всему массиву, а он зовётся
+// из recTitle внутри компаратора сортировки: на 4 000 записей это O(n² log n) и минуты ожидания.
+let recIndex: Map<string, Rec> | null = null;
+let recIndexVersion = -1;
+function recMap(): Map<string, Rec> {
+  // Пересобираем не только по версии, но и когда изменилось число записей: внутри одной
+  // мутации могут добавить запись и тут же спросить её по id.
+  if (recIndex && recIndexVersion === version && recIndex.size === st.records.length) return recIndex;
+  const m = new Map<string, Rec>();
+  for (const r of st.records) m.set(r.id, r);
+  recIndex = m; recIndexVersion = version;
+  return m;
+}
+export const recById = (id?: string | null) => (id ? recMap().get(id) : undefined);
 export const recordsOf = (entityId: string) => st.records.filter(r => r.entityId === entityId);
 export const userName = (id?: string) => st.users.find(u => u.id === id)?.name ?? "";
 export const userById = (id?: string) => st.users.find(u => u.id === id);
@@ -500,6 +513,7 @@ function repairAndTell(s: State) {
 const CHAT_MAX = 500;
 function trimChat(c: Chat) { if (c.msgs.length > CHAT_MAX) c.msgs.splice(0, c.msgs.length - CHAT_MAX); }
 
+let lastToggleAt = 0, lastToggleId = "";
 const ACT_MAX = 240;                                  // в хронику — суть, а не мегабайт текста
 function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string, editKey?: string) {
   const t = text.length > ACT_MAX ? text.slice(0, ACT_MAX) + "…" : text;
@@ -530,7 +544,10 @@ export const A = {
       const untouched = r && !st.tasks.some(t => t.recordId === r.id && !t.id.startsWith("t_rule_"))
         // след человека — это комментарий, правка поля или смена стадии; «создана» и авто-задача не в счёт
         && !st.activities.some(a => a.recordId === r.id && (a.kind === "comment" || a.kind === "field" || a.kind === "stage"))
-        && !st.chats.some(c => c.recordId === r.id);
+        && !st.chats.some(c => c.recordId === r.id)
+        // на карточку уже кто-то ссылается (создали из неё сделку) — удалять её нельзя:
+        // раньше карточка клиента исчезала молча, а у сделки оставалась ссылка в никуда
+        && !st.records.some(x => x.id !== r.id && Object.values(x.values).includes(r.id));
       if (r && fresh && empty && untouched) {
         mut(s => {
           s.records = s.records.filter(x => x.id !== r.id);
@@ -750,6 +767,10 @@ export const A = {
   // ---------- массовые действия: одна мутация и одна отмена на всю пачку ----------
   bulkStage(ids: string[], stageId: string) {
     pushHistory("смену стадии у нескольких");
+    let touched = 0;
+    // Правила на каждую из тысяч записей — это тысячи задач за один клик и вылет за квоту.
+    // Дёргаем правила только на разумной пачке, об остальном честно предупреждаем.
+    const RULE_LIMIT = 100;
     mut(s => {
       let pos = Math.max(0, ...s.records.filter(r => r.stageId === stageId).map(r => r.pos ?? 0));
       for (const id of ids) {
@@ -758,12 +779,20 @@ export const A = {
         if (r.stageId !== stageId) {
           r.stageId = stageId; r.stageAt = now(); r.pos = (pos += 1000); r.updatedAt = now();
           pushAct(r.id, "stage", `Стадия: ${stage.label}`, s.currentUserId);
-          const rid = r.id;
-          queueMicrotask(() => ruleHooks.stage?.(rid, stageId));
+          touched++;
+          if (touched <= RULE_LIMIT) {
+            const rid = r.id;
+            queueMicrotask(() => ruleHooks.stage?.(rid, stageId));
+          }
         }
       }
     });
-    toast(`Стадия изменена: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`, { description: "Ctrl+Z вернёт" });
+    if (!touched) { toast("Все выбранные уже на этой стадии", { description: "Ничего не изменил" }); return; }
+    toast(`Стадия изменена: ${touched} ${plural(touched, "запись", "записи", "записей")}`, {
+      description: touched > RULE_LIMIT
+        ? `Ctrl+Z вернёт · автоматизации отработали по первым ${RULE_LIMIT} — иначе получилось бы несколько тысяч задач`
+        : "Ctrl+Z вернёт",
+    });
   },
   bulkOwner(ids: string[], userId: string) {
     pushHistory("смену ответственного");
@@ -775,6 +804,7 @@ export const A = {
       }
     });
     toast(`Ответственный назначен: ${userName(userId)}`, { description: "Ctrl+Z вернёт" });
+
   },
   bulkTask(ids: string[], title: string, kind: Task["kind"], dueOffsetH: number) {
     pushHistory("постановку задач");
@@ -867,8 +897,13 @@ export const A = {
   },
   consumeDraft() { mut(s => { s.pendingDraft = null; }); },
   toggleTask(taskId: string) {
+    // Список открытых задач схлопывается под курсором, и вторая половина двойного клика
+    // попадала в соседнюю строку — закрывались ДВЕ задачи. Один щелчок = одна задача.
+    if (Date.now() - lastToggleAt < 350 && taskId !== lastToggleId) return;
+    lastToggleAt = Date.now(); lastToggleId = taskId;
     mut(s => {
-      const t = s.tasks.find(x => x.id === taskId)!;
+      const t = s.tasks.find(x => x.id === taskId);
+      if (!t) return;
       t.done = !t.done; t.doneAt = t.done ? now() : undefined;
       if (t.done && t.recordId) pushAct(t.recordId, "task", `Задача выполнена: ${t.title}`, s.currentUserId);
     });

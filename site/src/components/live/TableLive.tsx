@@ -21,6 +21,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
   const [editing, setEditing] = useState<{ rec: string; field: string } | null>(null);
   const [quick, setQuick] = useState("");
   const [sort, setSort] = useState<{ fieldId: string; dir: 1 | -1 } | null>(null);
+  const [limit, setLimit] = useState(200);
   const [sel, setSel] = useState<Set<string>>(new Set());     // массовые действия: что выделено
   const [bulkTask, setBulkTask] = useState("");
   const [newField, setNewField] = useState({ label: "", type: "text" });
@@ -37,6 +38,12 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
       return cmp * sort.dir;
     });
   } else sorted.sort((a, b) => b.createdAt - a.createdAt);
+
+  // Больше пары сотен строк браузер рисует секундами и замирает. Показываем порциями:
+  // «Итого» и массовые действия при этом считаются по ВСЕМ, а не по видимой части.
+  const PAGE = 200;
+  const shown = sorted.slice(0, limit);
+  const hidden = sorted.length - shown.length;
 
   const toggleSort = (fieldId: string) =>
     setSort(s => (s?.fieldId === fieldId ? (s.dir === 1 ? { fieldId, dir: -1 } : null) : { fieldId, dir: 1 }));
@@ -130,7 +137,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
         </tr>
       </thead>
       <tbody>
-        {sorted.map(r => (
+        {shown.map(r => (
           <tr key={r.id} className={cn("group/row hover:bg-muted/40", sel.has(r.id) && "bg-[hsl(var(--brass)/0.09)]")}>
             <td className="border-b pl-4 pr-1">
               <Checkbox aria-label="Выделить запись" checked={sel.has(r.id)}
@@ -187,6 +194,19 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
             </div>
           </td>
         </tr>
+        {hidden > 0 && (
+          <tr>
+            <td colSpan={cols.length + (e.stages ? 3 : 2)} className="border-b px-5 py-2.5">
+              <button onClick={() => setLimit(l => l + PAGE * 5)}
+                className="press rounded-md border px-2.5 py-1 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
+                Показать ещё {Math.min(hidden, PAGE * 5)} из {hidden}
+              </button>
+              <span className="ml-2 text-[11.5px] text-muted-foreground">
+                показано {shown.length} из {sorted.length} — так таблица не подвисает; поиск и фильтр ищут по всем
+              </span>
+            </td>
+          </tr>
+        )}
       </tbody>
       {cols.some(f => f.type === "money") && sorted.length > 0 && (
         <tfoot>

@@ -18,6 +18,10 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
   const subtitleField = e.fields.find(f => f.type === "relation");
 
   const clearDnd = () => { setDragId(null); setSlot(null); };
+  // Колонка на тысячу карточек рисуется секундами и замирает при каждом действии.
+  // Показываем первые — «Итого» в шапке колонки при этом честно считает все.
+  const [shown, setShown] = useState<Record<string, number>>({});
+  const COL_PAGE = 50;
 
   // Индикатор места вставки: абсолютный, не участвует ни в раскладке, ни в hit-тесте —
   // иначе карточки «уезжают» из-под курсора и позиция мигает
@@ -56,7 +60,7 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
               className="flex min-h-10 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"
               onDragOver={ev => { ev.preventDefault(); setSlot({ stage: st.id, index: rs.length }); }}
             >
-              {rs.map((r, i) => {
+              {rs.slice(0, shown[st.id] ?? COL_PAGE).map((r, i) => {
                 const overdue = openTasksFor(r.id).some(t => t.due < Date.now());
                 const noNext = openTasksFor(r.id).length === 0 && st.kind === "open";
                 const sub = subtitleField ? displayValue(subtitleField, r.values[subtitleField.id], dispCtx()) : "";
@@ -120,6 +124,12 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                   </div>
                 );
               })}
+              {rs.length > (shown[st.id] ?? COL_PAGE) && (
+                <button onClick={() => setShown(v => ({ ...v, [st.id]: (v[st.id] ?? COL_PAGE) + COL_PAGE * 4 }))}
+                  className="press rounded-md border border-dashed py-1.5 text-[11.5px] text-muted-foreground hover:border-foreground/30 hover:text-foreground">
+                  Показать ещё · скрыто {rs.length - (shown[st.id] ?? COL_PAGE)}
+                </button>
+              )}
               {active && rs.length === 0 && (
                 <div className="pointer-events-none rounded-md border border-dashed py-3 text-center text-[11px]" style={{ borderColor: "hsl(var(--brass) / 0.6)", color: "var(--brass-ink)" }}>
                   сюда

@@ -24,6 +24,10 @@ const TASK_NAME: Record<TaskKind, string> = { call: "Звонок", meet: "Вс�
 export function RecordDrawer({ recordId }: { recordId: string }) {
   const r = recById(recordId);
   const e = r ? entityCfg(r.entityId) : undefined;
+  // Карточка открывается ровно поверх кнопки «+ Сделка». Второй щелчок двойного клика попадал
+  // в полосу стадий и мгновенно помечал новую сделку «Проиграна». Первые 350 мс щелчки не берём.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => { setArmed(false); const t = window.setTimeout(() => setArmed(true), 350); return () => window.clearTimeout(t); }, [recordId]);
   const [comment, setComment] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const [taskKind, setTaskKind] = useState<TaskKind>("call");
@@ -53,7 +57,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
     <>
       <div className="fixed inset-0 z-40 bg-foreground/10 md:bg-transparent" onClick={() => A.openRecord(null)} />
       <aside data-drawer aria-label="Карточка записи" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[500px] flex-col border-l bg-card shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.25)]"
-        style={{ animation: "rise 0.22s var(--ease-out)" }}>
+        style={{ animation: "rise 0.22s var(--ease-out)", pointerEvents: armed ? undefined : "none" }}>
         <header className="flex items-start gap-2.5 border-b px-4 py-3">
           <div className="min-w-0 flex-1">
             <label className="eyebrow block">{titleField.label}{titleField.required && <span style={{ color: "var(--brass-ink)" }}> *</span>}</label>
