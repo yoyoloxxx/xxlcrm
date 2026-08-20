@@ -54,10 +54,18 @@
 </div>
 
 <script>
-  // Приёмник заявок пространства: подставлен ваш. Меняется в блоке «Куда отправляется».
-  var HOOK = "https://nddauhfqciuvzbvdipuf.supabase.co/functions/v1/hook?ws=c97e9f35-ada1-440b-a972-e1c33e361066&src=tilda&k=34f650ff5dbc43e0813c32cddaeeffff";
+  // ВНИМАНИЕ: сюда НЕЛЬЗЯ вписывать рабочий адрес приёмника и коммитить файл в репозиторий —
+  // в адресе лежит секрет, по которому любой посторонний сможет слать заявки в вашу CRM.
+  // Свой адрес возьмите в CRM: Настройки → «Ваш серверный приёмник заявок» и вставьте
+  // в поле «Куда отправляется» прямо в открытой странице (или в localStorage, см. ниже).
+  var HOOK = localStorage.getItem("xxl-form-hook")
+    || "https://<ваш-проект>.supabase.co/functions/v1/hook?ws=<id-пространства>&src=tilda&k=<секрет>";
   var urlBox = document.getElementById("url"), ok = document.getElementById("ok"), err = document.getElementById("err");
   urlBox.value = HOOK;
+  // адрес, вписанный руками, запоминаем в браузере — чтобы не держать секрет в файле
+  urlBox.addEventListener("change", function () {
+    try { localStorage.setItem("xxl-form-hook", urlBox.value.trim()); } catch (e) { void e; }
+  });
 
   document.getElementById("f").addEventListener("submit", function (e) {
     e.preventDefault();
