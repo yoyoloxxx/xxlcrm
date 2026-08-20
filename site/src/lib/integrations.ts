@@ -47,9 +47,9 @@ async function tgTick() {
   } catch { /* сеть моргнула — следующий тик */ }
 }
 
-async function tgSend(chatId: number, text: string): Promise<void> {
+async function tgSend(chatId: number, text: string): Promise<boolean> {
   const cfg = ints().tg;
-  if (cfg.status !== "ok") return;
+  if (cfg.status !== "ok") return false;
   try {
     const res = await fetch(tgApi(cfg.token, "sendMessage"), {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -57,7 +57,8 @@ async function tgSend(chatId: number, text: string): Promise<void> {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.description);
-  } catch (err) { toast.error("Telegram не доставил: " + String((err as Error).message ?? err).slice(0, 100)); }
+    return true;
+  } catch (err) { toast.error("Telegram не доставил: " + String((err as Error).message ?? err).slice(0, 100)); return false; }
 }
 
 // ---------- WhatsApp (Green API) ----------
@@ -108,15 +109,16 @@ async function waTick() {
   } catch { /* следующий тик */ }
 }
 
-async function waSend(chatId: string, text: string): Promise<void> {
-  if (ints().wa.status !== "ok") return;
+async function waSend(chatId: string, text: string): Promise<boolean> {
+  if (ints().wa.status !== "ok") return false;
   try {
     const res = await fetch(waApi("sendMessage"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, message: text }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
-  } catch (err) { toast.error("WhatsApp не доставил: " + String((err as Error).message ?? err).slice(0, 100)); }
+    return true;
+  } catch (err) { toast.error("WhatsApp не доставил: " + String((err as Error).message ?? err).slice(0, 100)); return false; }
 }
 
 // ---------- MAX (Bot API, зеркально Telegram) ----------
@@ -155,15 +157,16 @@ async function maxTick() {
   } catch { /* следующий тик */ }
 }
 
-async function maxSend(chatId: number, text: string): Promise<void> {
-  if (ints().max.status !== "ok") return;
+async function maxSend(chatId: number, text: string): Promise<boolean> {
+  if (ints().max.status !== "ok") return false;
   try {
     const res = await fetch(maxApi("messages", `&chat_id=${chatId}`), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
-  } catch (err) { toast.error("MAX не доставил: " + String((err as Error).message ?? err).slice(0, 100)); }
+    return true;
+  } catch (err) { toast.error("MAX не доставил: " + String((err as Error).message ?? err).slice(0, 100)); return false; }
 }
 
 // ---------- Tilda (webhook-мост) ----------
@@ -223,11 +226,16 @@ export const tildaHookUrl = () => (ints().tilda.hookId ? `https://webhook.site/$
 export async function sendChatMessage(chatId: string, text: string) {
   const chat = getState().chats.find(c => c.id === chatId);
   if (!chat) return;
-  A.chatSend(chatId, text);
-  if (chat.ext?.tgu !== undefined) await tguSend(chat.ext.tgu, text);
-  else if (chat.ext?.tg !== undefined) await tgSend(chat.ext.tg, text);
-  else if (chat.ext?.wa !== undefined) await waSend(chat.ext.wa, text);
-  else if (chat.ext?.max !== undefined) await maxSend(chat.ext.max, text);
+  const msgId = A.chatSend(chatId, text);
+  // Пузырь появляется сразу — так и надо. Но если канал не доставил, помечаем сообщение
+  // как неотправленное: раньше оно навсегда оставалось в переписке как будто ушло,
+  // и человек был уверен, что клиент его прочитал.
+  let okSent: boolean | undefined;
+  if (chat.ext?.tgu !== undefined) { await tguSend(chat.ext.tgu, text); okSent = undefined; }
+  else if (chat.ext?.tg !== undefined) okSent = await tgSend(chat.ext.tg, text);
+  else if (chat.ext?.wa !== undefined) okSent = await waSend(chat.ext.wa, text);
+  else if (chat.ext?.max !== undefined) okSent = await maxSend(chat.ext.max, text);
+  if (okSent === false && msgId) A.chatMarkFailed(chatId, msgId);
 }
 
 // ---------- движок ----------

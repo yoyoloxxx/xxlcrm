@@ -148,11 +148,15 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
             <div className="mx-auto flex max-w-xl flex-col gap-2">
               {chat.msgs.map(m => (
                 <div key={m.id} className={cn("flex", m.out ? "justify-end" : "justify-start")}>
-                  <div className={cn("max-w-[80%] rounded-xl px-3.5 py-2 text-[13px] leading-snug", m.out ? "rounded-br-[4px] text-primary-foreground" : "rounded-bl-[4px] border bg-card")}
-                    style={m.out ? { background: "hsl(var(--primary))" } : undefined}>
+                  <div className={cn("max-w-[80%] rounded-xl px-3.5 py-2 text-[13px] leading-snug",
+                    m.out ? "rounded-br-[4px] text-primary-foreground" : "rounded-bl-[4px] border bg-card",
+                    m.failed && "!border !border-destructive !bg-destructive/10 !text-foreground")}
+                    style={m.out && !m.failed ? { background: "hsl(var(--primary))" } : undefined}>
                     {m.text}
-                    <span className={cn("font-mono2 mt-0.5 block text-right text-[9.5px]", m.out ? "text-primary-foreground/70" : "text-muted-foreground")}>
-                      {new Date(m.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                    <span className={cn("font-mono2 mt-0.5 block text-right text-[9.5px]",
+                      m.failed ? "font-medium text-destructive" : m.out ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                      {/* не доставлено — так и говорим: раньше пузырь выглядел как отправленный */}
+                      {m.failed ? "не доставлено" : new Date(m.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
                 </div>

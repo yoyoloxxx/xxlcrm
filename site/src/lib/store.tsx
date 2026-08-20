@@ -245,6 +245,16 @@ const emit = () => {
 window.addEventListener("pagehide", () => {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; dispatchSave(); }
 });
+// В облаке сохранение уходит по сети и может не успеть. Приложение само просит «не закрывайте
+// вкладку» — значит, обязано и придержать её, а не молча отпустить работу в никуда.
+window.addEventListener("beforeunload", e => {
+  if (st.mode !== "cloud") return;
+  if (!saveTimer && !cloudPending()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+export const cloudPendingHook: { has?: () => boolean } = {};
+const cloudPending = () => !!cloudPendingHook.has?.();
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 export function useApp(): State { useSyncExternalStore(subscribe, () => version); return st; }
 export const getState = () => st;
@@ -957,13 +967,24 @@ export const A = {
       if (id) { const c = s.chats.find(x => x.id === id); if (c) c.unread = 0; }
     });
   },
-  chatSend(chatId: string, text: string) {
+  chatSend(chatId: string, text: string): string {
     text = String(cleanText(text) ?? "");
+    const id = uid("m");
     mut(s => {
       const c = s.chats.find(x => x.id === chatId)!;
-      c.msgs.push({ id: uid("m"), ts: now(), out: true, text });
+      c.msgs.push({ id, ts: now(), out: true, text });
       trimChat(c);
       if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)}: ${text}`, s.currentUserId);
+    });
+    return id;
+  },
+  /** Канал не доставил: помечаем сообщение, чтобы человек не думал, что клиент его прочитал. */
+  chatMarkFailed(chatId: string, msgId: string) {
+    mut(s => {
+      const c = s.chats.find(x => x.id === chatId); if (!c) return;
+      const m = c.msgs.find(x => x.id === msgId); if (!m) return;
+      m.failed = true;
+      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `НЕ доставлено (${channelName(c.channel)}): ${m.text}`, s.currentUserId);
     });
   },
   chatIncoming(chatId: string, text: string) {

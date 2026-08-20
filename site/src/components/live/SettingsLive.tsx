@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { IntStatus } from "@/lib/model";
 import { useApp, A, storageState } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user-lazy";
 import { Input } from "@/components/ui/input";
@@ -277,6 +277,16 @@ export function IntegrationsLive() {
           <div className="text-[12.5px] font-semibold">Ваш серверный приёмник заявок</div>
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Вставьте в Тильде: Настройки сайта → Формы → Webhook. Работает всегда, браузер не нужен.</p>
           <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{ownHook}</code>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+              if (!window.confirm("Перевыпустить секрет? Старый адрес перестанет работать, и его нужно будет заменить в форме на сайте.")) return;
+              const secret = await rotateHookSecret("tilda");
+              if (secret && s.wsId) setOwnHook(hookUrl(s.wsId, "tilda", secret));
+            }}>Перевыпустить секрет</Button>
+            <span className="text-[11px] leading-snug text-muted-foreground">
+              Если адрес куда-то утёк (репозиторий, переписка, скриншот) — перевыпустите: в нём лежит ключ, по которому можно слать заявки в вашу CRM.
+            </span>
+          </div>
         </div>
       )}
 
@@ -285,14 +295,19 @@ export function IntegrationsLive() {
         {ints.tilda.status !== "ok" ? (
           <>
             <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
-              Создам URL-приёмник (мост для теста; свой приёмник будет на шаге Supabase). Вставьте его в Тильде: Настройки сайта → Формы → Webhook — заявки сами станут сделками.
+              Создам URL-приёмник. Вставьте его в Тильде: Настройки сайта → Формы → Webhook — заявки сами станут сделками.
             </p>
             {ints.tilda.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tilda.error}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
               {s.mode === "cloud" && <Button className="h-9" onClick={() => void makeOwnHook()}>Создать свой URL (сервер)</Button>}
               <Button variant={s.mode === "cloud" ? "outline" : "default"} className="h-9" disabled={ints.tilda.status === "connecting"} onClick={tildaCreateHook}>
-                Временный мост (работает при открытой вкладке)
+                Временный мост (только для проверки)
               </Button>
+              <p className="basis-full text-[11px] leading-snug text-destructive">
+                Временный мост складывает заявки на <b>чужой публичный сервис</b> webhook.site: имя, телефон и текст
+                каждой заявки может прочитать любой, кто знает адрес, и они остаются там навсегда. Он годится
+                проверить, что форма настроена — боевые заявки через него пускать нельзя.
+              </p>
             </div>
           </>
         ) : (

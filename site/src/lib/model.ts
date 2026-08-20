@@ -24,7 +24,7 @@ export interface Activity { id: string; recordId: string; ts: number; kind: ActK
 export interface User { id: string; name: string; role: string; hue: number }
 
 export type Channel = "tg" | "wa" | "max" | "ig";
-export interface ChatMsg { id: string; ts: number; out: boolean; text: string }
+export interface ChatMsg { id: string; ts: number; out: boolean; text: string; failed?: boolean }
 export interface Chat {
   id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[]; demo?: boolean;
   ext?: ChatExt; // реальные внешние id; демо-чаты без ext

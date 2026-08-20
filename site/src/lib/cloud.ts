@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone, ruleHooks } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
@@ -196,6 +196,7 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   snap.reply_templates = new Map(data.replyTemplates.map(t => [t.id, canon(t)]));
 
   cloudHooks.save = scheduleSave;
+  cloudPendingHook.has = () => saving || dirtyAgain || cloudBroken;
   subscribeRealtime(id);
   void inboundBoot(id);      // что сервер принял, пока приложение было закрыто
   inboundSubscribe(id);
@@ -268,10 +269,13 @@ async function doSave(): Promise<void> {
         if (snap[c.table].get(item.id) !== j) changed.push({ id: item.id, j, row: c.toRow(item as never) });
       }
       const deletes = [...snap[c.table].keys()].filter(id => !seen.has(id));
-      if (changed.length) {
-        const { error } = await supa.from(c.table).upsert(changed.map(x => x.row));
-        if (error) problems.push(c.table + ": " + error.message);
-        else for (const x of changed) snap[c.table].set(x.id, x.j);
+      // Пачками: импорт на 10 000 строк уходил одним запросом, упирался в размер и вставал
+      // намертво. По 300 строк — и то, что прошло, отмечаем сразу, чтобы не переделывать.
+      for (let i = 0; i < changed.length; i += 300) {
+        const part = changed.slice(i, i + 300);
+        const { error } = await supa.from(c.table).upsert(part.map(x => x.row));
+        if (error) { problems.push(c.table + ": " + error.message); break; }
+        for (const x of part) snap[c.table].set(x.id, x.j);
       }
       if (deletes.length) {
         const { error } = await supa.from(c.table).delete().in("id", deletes);

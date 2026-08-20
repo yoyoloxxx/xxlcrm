@@ -23,6 +23,23 @@ export async function serverSupports(source: InboundSource): Promise<boolean> {
 const rnd = () => (crypto.randomUUID?.() ?? String(Math.random())).replace(/-/g, "");
 
 // секрет вебхука пространства: создаётся один раз и живёт в базе (его знает и функция, и владелец канала)
+/** Перевыпуск секрета приёмника: старый адрес перестаёт работать. Нужен, если адрес утёк —
+    например, попал в репозиторий или в переписку. После этого адрес в форме надо заменить. */
+export async function rotateHookSecret(source: InboundSource): Promise<string | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const secret = rnd();
+  const { error } = await supa.from("channel_hooks").upsert({ workspace_id: ws, source, secret });
+  if (error) {
+    toast.error("Не удалось перевыпустить секрет", {
+      description: /policy|permission|denied/i.test(error.message) ? "Это может только владелец пространства" : error.message.slice(0, 90),
+    });
+    return null;
+  }
+  toast.success("Секрет приёмника перевыпущен", { description: "Старый адрес больше не работает — вставьте новый в форму на сайте" });
+  return secret;
+}
+
 export async function ensureHookSecret(source: InboundSource): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;
