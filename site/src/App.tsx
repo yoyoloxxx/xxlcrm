@@ -24,7 +24,7 @@ import { cloudBoot, renameWs } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
 import { PresetPicker } from "@/components/live/PresetPicker";
-import { cloudState } from "@/lib/cloud";
+import { cloudState, iAmOwner } from "@/lib/cloud";
 import { setupMarks, markSetup } from "@/lib/setup";
 import { EntIcon } from "@/components/live/icons";
 import { TasksLive } from "@/components/live/TasksLive";
@@ -189,15 +189,22 @@ export default function App() {
         </div>
 
         {s.mode === "cloud" ? (
+          // Код приглашения — ключ ко всей базе, и в боковой панели он висел открыто у КАЖДОГО
+          // участника, с кнопкой «скопировать». Показываем и копируем только владельцу.
           <button
-            onClick={() => { navigator.clipboard?.writeText(s.inviteCode).then(() => toast("Код приглашения скопирован: " + s.inviteCode)); }}
-            title="Скопировать код приглашения для сотрудника"
+            onClick={() => {
+              if (!iAmOwner()) { go("settings"); return; }
+              navigator.clipboard?.writeText(s.inviteCode).then(() => toast("Код приглашения скопирован"));
+            }}
+            title={iAmOwner() ? "Скопировать код приглашения для сотрудника" : "Открыть настройки команды"}
             className="press mx-3 mb-3 flex items-center justify-between gap-2 rounded-md border bg-card px-2.5 py-[7px] text-left transition-colors duration-150 hover:border-foreground/25">
             <span className="min-w-0">
               <span className="block truncate text-[12.5px] font-medium">{s.wsName}</span>
-              <span className="font-mono2 block text-[9.5px] text-muted-foreground">в команде: {s.users.length} · код {s.inviteCode}</span>
+              <span className="font-mono2 block text-[9.5px] text-muted-foreground">
+                в команде: {s.users.length}{iAmOwner() ? " · код скрыт" : ""}
+              </span>
             </span>
-            <Copy className="size-3.5 shrink-0 text-muted-foreground" />
+            {iAmOwner() && <Copy className="size-3.5 shrink-0 text-muted-foreground" />}
           </button>
         ) : (
           <button
