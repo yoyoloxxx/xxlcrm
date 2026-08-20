@@ -178,7 +178,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.21</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.22</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -319,7 +319,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.21 · чужой не подпишется на ваши заявки, повторы Telegram не двоятся, серверный приём не теряет заявки</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.22 · даты не калечатся и не теряются, день рождения двигает напоминание, серверный приём не глотает ошибки</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>

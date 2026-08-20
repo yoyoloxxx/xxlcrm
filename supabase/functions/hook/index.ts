@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.16"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.17"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -68,6 +68,19 @@ function parseForm(fields: Any): Msg {
   const text = Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("; ");
   return { ext: {}, name, phone, text, fields };
 }
+
+// Supabase-клиент НЕ бросает исключение на ошибку базы — он возвращает {error}. Раньше эти
+// ошибки никто не смотрел: заявка не сохранялась, но помечалась «обработана», а владельцу
+// уходило уведомление о заявке, которой нет. Теперь любой отказ базы — это исключение.
+async function must<T>(p: PromiseLike<{ data: T; error: Any }>, what: string): Promise<T> {
+  const { data, error } = await p;
+  if (error) throw new Error(`${what}: ${error.message ?? error}`);
+  return data;
+}
+
+// Чужой текст: невидимые управляющие символы направления письма и полотна в 200 000 символов
+const BIDI = /[\u200E\u200F\u202A-\u202E\u2066-\u2069\u061C]/g;
+const clean = (v: unknown, max = 4000): string => String(v ?? "").replace(BIDI, "").slice(0, max);
 
 const BODY_MAX = 64 * 1024;               // 64 КБ хватит любой заявке; больше — не читаем
 const cut = (v: string) => (v.length > 8000 ? v.slice(0, 8000) + "…" : v);
@@ -163,6 +176,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   }
 
   const nowMs = Date.now();
+  msg = { ...msg, name: clean(msg.name, 120), text: clean(msg.text, 4000) };
   const message = { id: uid("m"), ts: nowMs, out: false, text: msg.text };
 
   // 1) диалог: старый — дописываем, нового — заводим
@@ -174,14 +188,22 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     const { data: chats } = await db.from("chats").select("*").eq("workspace_id", ws).eq("channel", src);
     existing = (chats ?? []).find((c: Any) => c.ext && String(c.ext[extKey]) === String(extVal)) ?? null;
     if (existing) {
-      const msgs = [...((existing.msgs as Any[]) ?? []), message].slice(-500);
-      await db.from("chats").update({ msgs, unread: (existing.unread ?? 0) + 1, updated_at: nowMs }).eq("id", existing.id);
+      // Дописываем сообщение НА СТОРОНЕ БАЗЫ: чтение-изменение-запись всего массива теряло
+      // сообщение, если два прилетели одновременно — второе затирало первое.
+      const appended = await db.rpc("chat_append_msg", { p_chat: existing.id, p_msg: message });
+      if (appended.error) {
+        // функции ещё нет (не выполнили миграцию) — старый путь, но хотя бы с проверкой ошибки
+        const msgs = [...((existing.msgs as Any[]) ?? []), message].slice(-500);
+        await must(db.from("chats").update({ msgs, unread: (existing.unread ?? 0) + 1, updated_at: nowMs }).eq("id", existing.id), "дозапись диалога");
+      }
       // Продолжение живой заявки — новую не создаём. Но если запись удалили или она уже закрыта,
       // человек пишет по новому поводу: это новая заявка, иначе сообщение потеряется в старом диалоге.
       if (await liveRecord(ws, existing.record_id, entities)) return;
     } else {
+      // id диалога выводим из внешнего ключа: два сообщения, пришедшие одновременно,
+      // попадут в ОДНУ строку, а не заведут два диалога и двух клиентов
       chat = {
-        id: uid("c"), workspace_id: ws, name: msg.name || msg.phone || "Клиент", phone: msg.phone ?? null,
+        id: chatIdFor(ws, src, String(extVal)), workspace_id: ws, name: clean(msg.name || msg.phone || "Клиент", 120), phone: msg.phone ?? null,
         channel: src, record_id: null, unread: 1, ext: msg.ext, msgs: [message], updated_at: nowMs,
       };
     }
@@ -208,11 +230,11 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     const srcOpt = sourceOption(clientEnt, src);
     if (srcOpt) values[srcOpt.fieldId] = srcOpt.optionId;
     clientId = uid("r");
-    await db.from("records").insert({
+    await must(db.from("records").insert({
       id: clientId, workspace_id: ws, entity_id: clientEnt.id, num: await nextNum(ws, clientEnt.id),
       values, stage_id: clientEnt.stages?.[0]?.id ?? null, stage_at: nowMs, owner_id: ownerId, pos: nowMs,
       created_at: nowMs, updated_at: nowMs,
-    });
+    }), "карточка клиента");
   }
 
   // 3) заявка: если у клиента уже есть открытая — не плодим вторую
@@ -238,11 +260,11 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   if (srcOpt) values[srcOpt.fieldId] = srcOpt.optionId;
 
   const recId = uid("r");
-  await db.from("records").insert({
+  await must(db.from("records").insert({
     id: recId, workspace_id: ws, entity_id: entity.id, num: await nextNum(ws, entity.id),
     values, stage_id: stage?.id ?? null, stage_at: nowMs, owner_id: ownerId, pos: nowMs,
     created_at: nowMs, updated_at: nowMs,
-  });
+  }), "заявка");
   await db.from("activities").insert([
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs, kind: "created", text: "Запись создана", user_id: null },
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs + 1, kind: "comment", text: `Пришло с сервера: ${srcName(src)}${msg.phone ? " · " + msg.phone : ""}`, user_id: null },
@@ -268,19 +290,30 @@ async function liveRecord(ws: string, recordId: string | null, entities: Any[]):
   if (!data) return false;                                  // запись удалили — диалог висит в пустоту
   const e = entities.find(x => x.id === data.entity_id);
   const stages: Any[] = e?.stages ?? [];
-  if (!stages.length) return false;                         // карточка клиента, а не заявка — повод завести заявку
+  // Раздел без воронки: закрывать нечего, а значит каждое следующее сообщение НЕ повод
+  // заводить новую запись. Раньше маршрут в справочник плодил карточку на каждое сообщение.
+  if (!stages.length) return entities.some(x => x.id === data.entity_id && !x.stages?.length) ? true : false;
   return stages.find((s: Any) => s.id === data.stage_id)?.kind === "open";
 }
 
 // привязать диалог к записи: новый диалог вставляем, существующий — перепривязываем
 async function attachChat(fresh: Any | null, existing: Any | null, recordId: string): Promise<void> {
-  if (fresh) { fresh.record_id = recordId; await db.from("chats").insert(fresh); }
-  else if (existing) await db.from("chats").update({ record_id: recordId }).eq("id", existing.id);
+  if (fresh) { fresh.record_id = recordId; await must(db.from("chats").upsert(fresh, { onConflict: "id" }), "диалог"); }
+  else if (existing) await must(db.from("chats").update({ record_id: recordId }).eq("id", existing.id), "привязка диалога");
 }
 
+// Детерминированный id диалога: одинаковый для одного и того же внешнего собеседника
+function chatIdFor(ws: string, src: string, ext: string): string {
+  let h = 2166136261;
+  for (const ch of `${ws}|${src}|${ext}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return "c_srv_" + (h >>> 0).toString(36) + "_" + ext.replace(/[^\w]/g, "").slice(-12);
+}
+
+// Раньше номер был «сколько записей + 1»: после любого удаления номера начинали повторяться.
 async function nextNum(ws: string, entityId: string): Promise<number> {
-  const { count } = await db.from("records").select("id", { count: "exact", head: true }).eq("workspace_id", ws).eq("entity_id", entityId);
-  return (count ?? 0) + 1;
+  const { data } = await db.from("records").select("num").eq("workspace_id", ws).eq("entity_id", entityId)
+    .order("num", { ascending: false }).limit(1);
+  return ((data?.[0]?.num as number) ?? 0) + 1;
 }
 
 function sourceOption(e: Any, src: string): { fieldId: string; optionId: string } | undefined {
@@ -312,9 +345,9 @@ Deno.serve(async (req: Request) => {
   // плодил второй такой же диалог и накручивал счётчик непрочитанных.
   const dedupId = String(payload?.update_id ?? payload?.message_id ?? payload?.marker ?? "");
   if (dedupId) {
-    const { data: seen } = await db.from("inbound")
+    const { data: seen, error: seenErr } = await db.from("inbound")
       .select("id").eq("workspace_id", ws).eq("source", src).eq("ext_key", dedupId).limit(1);
-    if (seen && seen.length) return json({ ok: true, duplicate: true });
+    if (!seenErr && seen && seen.length) return json({ ok: true, duplicate: true });
   }
   if (src === "tg" && await handleStart(ws, payload)) return json({ ok: true, subscribed: true });
   const msg = src === "tg" ? parseTelegram(payload)
@@ -330,11 +363,16 @@ Deno.serve(async (req: Request) => {
     processed = false;                       // не вышло — приложение доделает при открытии
     error = String((e as Error).message ?? e).slice(0, 300);
     console.error("ingest failed", error);
+    // Владельцу — честное «заявка пришла, но не легла», иначе он узнает о потере от клиента
+    await notify(ws, `Заявка пришла (${srcName(src)}), но НЕ сохранилась: ${error}\n${(msg.name || msg.phone || "")}\n${msg.text.slice(0, 200)}`).catch(() => null);
   }
-  await db.from("inbound").insert({
+  const logRow: Any = {
     workspace_id: ws, source: src, ext: msg.ext, name: cut(msg.name ?? ""), phone: msg.phone ?? null,
     text: cut(msg.text ?? ""), fields: msg.fields ?? null, ts: Date.now(), processed, error,
-    ext_key: dedupId || null,
-  });
-  return json({ ok: true });
+  };
+  const logged = await db.from("inbound").insert({ ...logRow, ext_key: dedupId || null });
+  // Функцию могли выкатить раньше, чем выполнили SQL-миграцию: тогда колонки ext_key нет,
+  // и раньше из-за этого переставал писаться ВЕСЬ журнал входящих. Пишем без неё.
+  if (logged.error) await db.from("inbound").insert(logRow);
+  return json(processed ? { ok: true } : { ok: false, queued: true, error }, processed ? 200 : 202);
 });

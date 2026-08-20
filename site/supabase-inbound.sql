@@ -39,6 +39,37 @@ create unique index if not exists inbound_dedup on public.inbound (workspace_id,
 -- схеме, из-за чего серверная функция падала на запросе и заявки молча терялись.
 alter table public.ws_config add column if not exists automations jsonb;
 
+-- Дозапись сообщения в диалог на стороне базы. Раньше сервер читал весь массив msgs,
+-- дописывал и клал обратно: два сообщения, пришедшие одновременно, затирали друг друга.
+create or replace function public.chat_append_msg(p_chat text, p_msg jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  full_list jsonb;
+  n int;
+begin
+  select coalesce(msgs, '[]'::jsonb) || jsonb_build_array(p_msg) into full_list
+    from public.chats where id = p_chat for update;
+  if full_list is null then return; end if;
+  n := jsonb_array_length(full_list);
+  if n > 500 then
+    select coalesce(jsonb_agg(el order by ord), '[]'::jsonb) into full_list
+      from jsonb_array_elements(full_list) with ordinality t(el, ord)
+     where ord > n - 500;
+  end if;
+  update public.chats
+     set msgs = full_list,
+         unread = coalesce(unread, 0) + 1,
+         updated_at = (extract(epoch from now()) * 1000)::bigint
+   where id = p_chat;
+end;
+$$;
+revoke all on function public.chat_append_msg(text, jsonb) from public;
+grant execute on function public.chat_append_msg(text, jsonb) to service_role;
+
 alter table public.channel_hooks enable row level security;
 alter table public.inbound enable row level security;
 

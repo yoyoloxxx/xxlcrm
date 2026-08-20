@@ -50,28 +50,40 @@ export function parseRuDate(raw: string, base = new Date()): number | null {
     const mi = MONFULL.findIndex(x => m![2].startsWith(x));
     if (mi >= 0) return mk(Number(m[1]), mi + 1, m[3] ? Number(m[3]) : base.getFullYear(), base);
   }
-  // «31.12.2026», «31/12/26», «31-12», «31.12»
+  // ISO из буфера или выгрузки: 1990-05-06. Проверяем ПЕРВЫМ — иначе «сплошные цифры» ниже
+  // съедали её как 19-90-0506 и день рождения из веб-формы молча пропадал.
+  m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (m) return mk(Number(m[3]), Number(m[2]), Number(m[1]), base);
+  // «31.12.2026», «31/12/26», «31-12», «31.12», «6.5.1990»
   m = /^(\d{1,2})[.\-/ ](\d{1,2})(?:[.\-/ ](\d{2,4}))?$/.exec(s);
-  if (m) return mk(Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : base.getFullYear(), base);
+  if (m) return mk(Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : 0, base);
   // сплошные цифры: 3112 / 311226 / 31122026
   m = /^(\d{2})(\d{2})(\d{2}|\d{4})?$/.exec(s.replace(/\D/g, ""));
-  if (m) return mk(Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : base.getFullYear(), base);
-  // ISO из вставки буфера
-  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (m) return mk(Number(m[3]), Number(m[2]), Number(m[1]), base);
+  if (m) return mk(Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : 0, base);
   return null;
 }
 
 function mk(d: number, mo: number, y: number, base: Date): number | null {
   if (d < 1 || d > 31 || mo < 1 || mo > 12) return null;
+  const build = (year: number) => {
+    const dt = new Date(year, mo - 1, d, 12);
+    return dt.getDate() === d && dt.getMonth() === mo - 1 ? dt : null;   // 31 февраля не бывает
+  };
+  if (!y) {
+    // год не назвали: берём текущий, а если такой даты в нём нет (29 февраля) — ближайший, где есть
+    for (let i = 0; i < 8; i++) { const dt = build(base.getFullYear() + i); if (dt) return dt.getTime(); }
+    return null;
+  }
   let year = y;
-  // двузначный год: 69–99 — это прошлый век (даты рождения), 00–68 — этот
-  if (y < 100) year = y > 68 ? 1900 + y : 2000 + y;
+  if (y < 100) {
+    // Двузначный год. «27» — это ближайший срок, «68» — год рождения. Правило: берём этот век,
+    // но если получается больше чем на пять лет вперёд — значит, речь о прошлом.
+    year = 2000 + y;
+    if (year - base.getFullYear() > 5) year = 1900 + y;
+  }
   if (year < 1900 || year > 2200) return null;
-  const dt = new Date(year, mo - 1, d, 12);
-  if (dt.getDate() !== d || dt.getMonth() !== mo - 1) return null; // 31 февраля
-  void base;
-  return dt.getTime();
+  const dt = build(year);
+  return dt ? dt.getTime() : null;
 }
 
 /** «чч:мм» → минуты от полуночи */

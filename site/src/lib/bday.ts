@@ -2,7 +2,7 @@
 // Авто-задача «Поздравить» создаётся за 0–7 дней с детерминированным id — не дублируется ни локально, ни в команде.
 import type { EntityCfg, Field, Rec } from "./model";
 import { DAY } from "./model";
-import { getState, recTitle, A } from "./store";
+import { getState, recTitle, A, phoneKey } from "./store";
 
 const isBdayField = (f: Field) => f.type === "date" && /рожде|birth/i.test(f.label);
 
@@ -22,8 +22,11 @@ export function upcomingBirthdays(withinDays = 30): Bday[] {
     const f = fieldsByEntity.get(r.entityId);
     if (!f) continue;
     const raw = Number(r.values[f.id]);
-    if (!raw || isNaN(raw)) continue;
+    // мусор в поле (или дата за пределами Date) раньше ломал весь блок дней рождения
+    // и плодил вечно просроченную задачу-призрак
+    if (!raw || !isFinite(raw) || Math.abs(raw) > 8.64e15) continue;
     const b = new Date(raw);
+    if (isNaN(b.getTime()) || b.getFullYear() < 1900 || b.getFullYear() > 2200) continue;
     let next = new Date(today.getFullYear(), b.getMonth(), b.getDate());
     if (next.getTime() < today.getTime()) next = new Date(today.getFullYear() + 1, b.getMonth(), b.getDate());
     const inDays = Math.round((next.getTime() - today.getTime()) / DAY);
@@ -44,7 +47,12 @@ export const inDaysLabel = (n: number) => (n === 0 ? "сегодня!" : n === 1
 export function ensureBirthdayTasks() {
   for (const b of upcomingBirthdays(7)) {
     const at = new Date(b.nextTs); at.setHours(10, 0, 0, 0);
-    const id = `t_bday_${b.rec.id}_${at.getFullYear()}`; // детерминированный id: команда не создаст дублей
+    // В id входит и сама дата: поправил день рождения — старое напоминание уезжает, новое встаёт.
+    // Раньше в карточке было 25-е, а задача продолжала стоять на 22-е, и это никак не чинилось.
+    const dm = `${String(at.getMonth() + 1).padStart(2, "0")}${String(at.getDate()).padStart(2, "0")}`;
+    const id = `t_bday_${b.rec.id}_${at.getFullYear()}_${dm}`;   // детерминированный id: команда не создаст дублей
+    const stale = getState().tasks.filter(t => !t.done && t.id !== id && t.id.startsWith(`t_bday_${b.rec.id}_`));
+    for (const t of stale) A.taskDelete(t.id);
     A.taskAddAt(id, `Поздравить: ${recTitle(b.rec.id)} (день рождения)`, "msg", at.getTime(), b.rec.id);
   }
 }
@@ -56,8 +64,7 @@ export function chatForRecord(rec: Rec): string | null {
   if (direct) return direct.id;
   const e = st.entities.find(x => x.id === rec.entityId);
   const phoneF = e?.fields.find(f => f.type === "phone");
-  const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
-  const d = phoneF ? digits(rec.values[phoneF.id]) : "";
-  if (d.length < 7) return null;
-  return st.chats.find(c => digits(c.phone) === d)?.id ?? null;
+  const d = phoneF ? phoneKey(rec.values[phoneF.id]) : null;
+  if (!d) return null;
+  return st.chats.find(c => phoneKey(c.phone) === d)?.id ?? null;
 }

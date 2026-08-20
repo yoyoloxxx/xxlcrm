@@ -5,6 +5,7 @@ import { parseRuDate, parseRuTime, fmtRuDate, fmtRuTime, humanDate, startOfDay, 
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarDays } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
@@ -19,6 +20,7 @@ export function DateInput({ value, onChange, withTime, autoFocus, onDone, classN
   const [bad, setBad] = useState(false);
   const [open, setOpen] = useState(false);
   const skipBlur = useRef(false);
+  const masked = useRef(false);   // текст сейчас нарисован маской, а не набран руками
 
   useEffect(() => { setText(fmtRuDate(value)); if (withTime) setTime(ts ? fmtRuTime(value) : ""); }, [value, withTime, ts]);
 
@@ -30,14 +32,17 @@ export function DateInput({ value, onChange, withTime, autoFocus, onDone, classN
     onChange(new Date(d.getFullYear(), d.getMonth(), d.getDate(), mins === null ? 12 : Math.floor(mins / 60), mins === null ? 0 : mins % 60).getTime());
   };
 
-  const commit = () => {
+  // Возвращает, удалось ли разобрать: при неудаче редактор НЕ закрываем — иначе Enter
+  // в таблице молча выбрасывал набранное, и человек узнавал об этом через месяц.
+  const commit = (): boolean => {
     const raw = text.trim();
-    if (!raw) { setBad(false); push(null); return; }
+    if (!raw) { setBad(false); push(null); return true; }
     const parsed = parseRuDate(raw);
-    if (parsed === null) { setBad(true); return; }
+    if (parsed === null) { setBad(true); return false; }
     setBad(false);
     setText(fmtRuDate(parsed));
     push(parsed);
+    return true;
   };
 
   // Ввод цифрами сам расставляет точки: 3112 → 31.12, 31122026 → 31.12.2026.
@@ -47,11 +52,18 @@ export function DateInput({ value, onChange, withTime, autoFocus, onDone, classN
     setBad(false);
     const before = text.replace(/\D/g, "");
     const d = v.replace(/\D/g, "");
-    if (/^[\d./\- ]*$/.test(v) && d.length > before.length && d.length <= 8) {
+    // Маска включается, только когда человек набирает ОДНИ ЦИФРЫ — свои или продолжая уже
+    // нарисованное маской. Если он печатает точки сам («6.5.1990»), не трогаем: раньше маска
+    // съедала его точку и получалось «65.19.90».
+    const onlyDigits = /^\d*$/.test(v);
+    const continuing = masked.current && v.startsWith(text) && /^\d+$/.test(v.slice(text.length));
+    if (d.length > before.length && d.length <= 8 && (onlyDigits || continuing)) {
+      masked.current = true;
       if (d.length >= 5) return setText(`${d.slice(0, 2)}.${d.slice(2, 4)}.${d.slice(4)}`);
       if (d.length >= 3) return setText(`${d.slice(0, 2)}.${d.slice(2)}`);
       return setText(d);
     }
+    masked.current = false;
     setText(v);
   };
 
@@ -68,9 +80,14 @@ export function DateInput({ value, onChange, withTime, autoFocus, onDone, classN
         <Input autoFocus={autoFocus} value={text} inputMode="numeric" placeholder="дд.мм.гггг"
           aria-label="Дата" aria-invalid={bad || undefined}
           onChange={e => onType(e.target.value)}
-          onBlur={() => { if (skipBlur.current) { skipBlur.current = false; return; } commit(); if (!withTime) onDone?.(); }}
+          onBlur={() => {
+            if (skipBlur.current) { skipBlur.current = false; return; }
+            const okDate = commit();
+            if (!okDate) toast.warning("Дату не понял — значение не сохранено", { description: `«${text.trim()}». Например: 31.12.2026, завтра, +3, пт` });
+            if (!withTime) onDone?.();
+          }}
           onKeyDown={e => {
-            if (e.key === "Enter") { commit(); onDone?.(); }
+            if (e.key === "Enter") { if (commit()) onDone?.(); }
             if (e.key === "Escape") { setText(fmtRuDate(value)); setBad(false); onDone?.(); }
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
               const cur = parseRuDate(text.trim()) ?? startOfDay(new Date());

@@ -1253,7 +1253,18 @@ export const A = {
       const existing = key && phoneF ? st.records.find(r => r.entityId === contactsCfg.id && phoneKey(r.values[phoneF.id]) === key) : undefined;
       if (existing) {
         contactId = existing.id;
-        if (bdayTs) mut(s => { const r = s.records.find(x => x.id === contactId)!; r.values["bday"] = bdayTs; r.updatedAt = now(); });
+        // Дату рождения с сайта пишем ТОЛЬКО в пустое поле и оставляем след в хронике.
+        // Раньше чужая заявка молча перезаписывала то, что менеджер уточнил у клиента лично.
+        if (bdayTs) mut(s => {
+          const r = s.records.find(x => x.id === contactId)!;
+          const had = Number(r.values["bday"]) || 0;
+          if (!had) {
+            r.values["bday"] = bdayTs; r.updatedAt = now();
+            pushAct(r.id, "field", `День рождения: ${new Date(bdayTs).toLocaleDateString("ru-RU")} (из заявки с сайта)`, s.currentUserId);
+          } else if (had !== bdayTs) {
+            pushAct(r.id, "comment", `В заявке с сайта другая дата рождения: ${new Date(bdayTs).toLocaleDateString("ru-RU")} — в карточке оставил прежнюю`, s.currentUserId);
+          }
+        });
       } else {
         const values: Record<string, unknown> = { [contactsCfg.titleFieldId]: name || phone || "Клиент с сайта" };
         if (phoneF && phone) values[phoneF.id] = phone;

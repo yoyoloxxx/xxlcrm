@@ -13,7 +13,7 @@ const key = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 const MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
 
 export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (r: Rec) => boolean }) {
-  useApp();
+  const s = useApp();
   const [offset, setOffset] = useState(0);
   const dateFields = entity.fields.filter(f => f.type === "date" || f.type === "datetime");
   const [fieldId, setFieldId] = useState(dateFields[0]?.id ?? "");
@@ -74,7 +74,9 @@ export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (
       });
     }
     return map;
-  }, [entity, fieldId, showTasks, filter, offset, getState().records.length, getState().tasks.length]);
+    // Пересчитываем на КАЖДЫЙ рендер стора: раньше зависимости смотрели на длину массивов,
+    // и поправленная дата не двигала событие в календаре до перезагрузки.
+  }, [entity, fieldId, showTasks, filter, offset, s]);
 
   const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
   const shift = (first.getDay() + 6) % 7; // неделя с понедельника
