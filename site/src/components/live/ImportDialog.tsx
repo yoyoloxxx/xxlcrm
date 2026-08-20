@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { EntityCfg } from "@/lib/model";
 import { plural } from "@/lib/model";
-import { A, allUsers, useApp, storageFits } from "@/lib/store";
+import { A, allUsers, useApp, storageFits, undo } from "@/lib/store";
 import { decodeFile, guessDelimiter, parseCSVReport, looksLikeData, HEADER_HINTS } from "@/lib/csv";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -116,12 +116,12 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
       res.badDates ? `не понял дат: ${res.badDates} (проверьте формат — жду дд.мм.гггг)` : "",
       res.unknownStages.length ? `стадии не найдены и заменены на первую: ${res.unknownStages.join(", ")}` : "",
       res.optionsCapped ? "в колонке-списке слишком много разных значений — остальные не добавлял" : "",
-      "Ctrl+Z отменит импорт целиком",
+      "отменить импорт целиком — Ctrl+Z или кнопка «Отменить» в этом сообщении",
     ].filter(Boolean);
     const noisy = res.badDates || res.unknownStages.length || res.optionsCapped;
     (noisy ? toast.warning : toast.success)(
       `Загружено: ${res.created} ${plural(res.created, "запись", "записи", "записей")}`,
-      { duration: noisy ? 20000 : 6000, description: parts.join(" · ") },
+      { duration: noisy ? 20000 : 8000, description: parts.join(" · "), action: { label: "Отменить", onClick: () => { undo(); } } },
     );
     setBusy(false);
     onOpenChange(false);
@@ -230,7 +230,7 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
             </div>
 
             <div className="flex items-center gap-2 border-t px-5 py-3">
-              <span className="text-[11.5px] text-muted-foreground">Проверьте пары слева — импорт можно отменить через Ctrl+Z</span>
+              <span className="text-[11.5px] text-muted-foreground">Проверьте пары слева — импорт можно отменить сразу после загрузки</span>
               <Button className="ml-auto h-9" disabled={!body.length || !mapped || busy} onClick={() => void run()}>
                 {busy ? "Загружаю…" : `Загрузить ${body.length} ${plural(body.length, "строку", "строки", "строк")}`}
               </Button>

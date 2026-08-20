@@ -1,5 +1,5 @@
 // Карточка записи: поля, полоса стадий, задачи, хронология, Esc для закрытия
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
 import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, missingRequired, isBlank, entityCfg as entCfg } from "@/lib/store";
@@ -28,6 +28,27 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
   // в полосу стадий и мгновенно помечал новую сделку «Проиграна». Первые 350 мс щелчки не берём.
   const [armed, setArmed] = useState(false);
   useEffect(() => { setArmed(false); const t = window.setTimeout(() => setArmed(true), 350); return () => window.clearTimeout(t); }, [recordId]);
+  // Карточка — модальное окно: фокус входит в неё (иначе до первого поля 14 нажатий Tab),
+  // а после закрытия возвращается туда, откуда её открыли, а не падает в body.
+  const asideRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const returnTo = document.activeElement as HTMLElement | null;
+    // Фокус ставим на саму карточку, а не в первое поле: тогда Tab сразу идёт по её
+    // содержимому, а Escape закрывает карточку, не «выходя из поля» лишним нажатием.
+    const t = window.setTimeout(() => asideRef.current?.focus(), 360);
+    return () => { window.clearTimeout(t); if (returnTo && document.body.contains(returnTo)) returnTo.focus(); };
+  }, [recordId]);
+  // Tab не должен выпадать из карточки в фон: там лежит то, чего человек сейчас не видит
+  const trap = (ev: React.KeyboardEvent) => {
+    if (ev.key !== "Tab") return;
+    const nodes = asideRef.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])');
+    if (!nodes?.length) return;
+    const list = [...nodes].filter(n => n.offsetParent !== null);
+    if (!list.length) return;
+    const first = list[0], last = list[list.length - 1];
+    if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+  };
   const [comment, setComment] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const [taskKind, setTaskKind] = useState<TaskKind>("call");
@@ -36,7 +57,9 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
     const h = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return;
       const t = ev.target as HTMLElement | null;
-      if (t && (t.closest("[role=dialog]") || t.closest("[data-radix-popper-content-wrapper]"))) return;
+      // Карточка сама теперь role="dialog" — не путаем её с ЧУЖИМ диалогом поверх неё
+      const dlg = t?.closest("[role=dialog]");
+      if ((dlg && !dlg.hasAttribute("data-drawer")) || t?.closest("[data-radix-popper-content-wrapper]")) return;
       // Первый Escape в поле — выйти из поля, а не выбросить карточку: человек правил дату,
       // передумал, нажал Escape — и терял всю карточку. Второй Escape закрывает.
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) { t.blur(); return; }
@@ -56,7 +79,9 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
   return (
     <>
       <div className="fixed inset-0 z-40 bg-foreground/10 md:bg-transparent" onClick={() => A.openRecord(null)} />
-      <aside data-drawer aria-label="Карточка записи" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[500px] flex-col border-l bg-card shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.25)]"
+      <aside data-drawer role="dialog" aria-modal="true" aria-label={`Карточка: ${recTitle(r.id) || e.name}`}
+        ref={asideRef} onKeyDown={trap} tabIndex={-1}
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[500px] flex-col border-l bg-card shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.25)]"
         style={{ animation: "rise 0.22s var(--ease-out)", pointerEvents: armed ? undefined : "none" }}>
         <header className="flex items-start gap-2.5 border-b px-4 py-3">
           <div className="min-w-0 flex-1">

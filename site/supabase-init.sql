@@ -86,8 +86,12 @@ create index if not exists tpl_ws on public.reply_templates (workspace_id);
 create table if not exists public.ws_config (
   workspace_id uuid primary key references public.workspaces(id) on delete cascade,
   entities jsonb,
+  -- маршруты приёма и правила: без этой колонки серверная функция роняла запрос целиком
+  -- и заявка с сайта молча не создавала ни записи, ни диалога
+  automations jsonb,
   updated_at bigint not null default 0
 );
+alter table public.ws_config add column if not exists automations jsonb;
 
 -- ---------- RLS ----------
 alter table public.workspaces enable row level security;

@@ -39,6 +39,41 @@ create unique index if not exists inbound_dedup on public.inbound (workspace_id,
 -- схеме, из-за чего серверная функция падала на запросе и заявки молча терялись.
 alter table public.ws_config add column if not exists automations jsonb;
 
+-- Кто что может удалять. Раньше любой участник (а порог входа — восьмисимвольный код
+-- приглашения, который виден всем) мог одним запросом стереть всю базу пространства.
+-- Теперь: свои записи и задачи сотрудник удаляет сам, чужие — только владелец.
+-- Читать, создавать и править по-прежнему может каждый участник.
+create or replace function public.is_owner(ws uuid) returns boolean
+language sql stable security definer set search_path = public as
+$$ select exists (select 1 from workspaces w where w.id = ws and w.owner_id = auth.uid()); $$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['records','tasks'] loop
+    execute format('drop policy if exists %I on public.%I', t || '_all', t);
+    execute format('drop policy if exists %I on public.%I', t || '_sel', t);
+    execute format('drop policy if exists %I on public.%I', t || '_ins', t);
+    execute format('drop policy if exists %I on public.%I', t || '_upd', t);
+    execute format('drop policy if exists %I on public.%I', t || '_del', t);
+    execute format('create policy %I on public.%I for select using (public.is_member(workspace_id))', t || '_sel', t);
+    execute format('create policy %I on public.%I for insert with check (public.is_member(workspace_id))', t || '_ins', t);
+    execute format('create policy %I on public.%I for update using (public.is_member(workspace_id)) with check (public.is_member(workspace_id))', t || '_upd', t);
+    execute format('create policy %I on public.%I for delete using (public.is_member(workspace_id) and (owner_id = auth.uid() or public.is_owner(workspace_id)))', t || '_del', t);
+  end loop;
+end $$;
+
+-- Диалоги: удалять переписку с клиентом может только владелец
+drop policy if exists chat_all on public.chats;
+drop policy if exists chat_sel on public.chats;
+drop policy if exists chat_ins on public.chats;
+drop policy if exists chat_upd on public.chats;
+drop policy if exists chat_del on public.chats;
+create policy chat_sel on public.chats for select using (public.is_member(workspace_id));
+create policy chat_ins on public.chats for insert with check (public.is_member(workspace_id));
+create policy chat_upd on public.chats for update using (public.is_member(workspace_id)) with check (public.is_member(workspace_id));
+create policy chat_del on public.chats for delete using (public.is_owner(workspace_id));
+
 -- Участник мог назначить себя владельцем: политика на UPDATE не проверяла, ЧТО он пишет.
 -- Своё имя менять можно, роль — нет.
 drop policy if exists mem_update_self on public.members;
@@ -82,10 +117,6 @@ alter table public.inbound enable row level security;
 
 -- Токен бота и секрет приёмника — это доступ к переписке с клиентами и право слать
 -- заявки в CRM. Рядовому участнику они не нужны: оставляем их только владельцу.
-create or replace function public.is_owner(ws uuid) returns boolean
-language sql stable security definer set search_path = public as
-$$ select exists (select 1 from workspaces w where w.id = ws and w.owner_id = auth.uid()); $$;
-
 drop policy if exists hooks_all on public.channel_hooks;
 drop policy if exists hooks_owner on public.channel_hooks;
 create policy hooks_owner on public.channel_hooks for all

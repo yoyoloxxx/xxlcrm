@@ -57,13 +57,13 @@ export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
                     <Select value={entity?.id ?? ""} onValueChange={v => A.routeUpdate(src, { entityId: v, stageId: undefined })}>
-                      <SelectTrigger className="h-8 w-[150px] text-[12px]"><SelectValue placeholder="раздел" /></SelectTrigger>
+                      <SelectTrigger aria-label={`${sourceName(src)}: в какой раздел`} className="h-8 w-[150px] text-[12px]"><SelectValue placeholder="раздел" /></SelectTrigger>
                       <SelectContent>
                         {entities.map(e => <SelectItem key={e.id} value={e.id}>{e.namePlural}</SelectItem>)}
                       </SelectContent>
                     </Select>
                     <Select value={r.stageId ?? NO_STAGE} onValueChange={v => A.routeUpdate(src, { stageId: v === NO_STAGE ? undefined : v })}>
-                      <SelectTrigger className="h-8 w-[168px] text-[12px]" disabled={!entity?.stages?.length}>
+                      <SelectTrigger aria-label={`${sourceName(src)}: в какую стадию`} className="h-8 w-[168px] text-[12px]" disabled={!entity?.stages?.length}>
                         <SelectValue placeholder={entity?.stages?.length ? "стадия" : "без стадий"} />
                       </SelectTrigger>
                       <SelectContent>
@@ -72,7 +72,7 @@ export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
                       </SelectContent>
                     </Select>
                     <Select value={r.ownerId ?? NO_OWNER} onValueChange={v => A.routeUpdate(src, { ownerId: v === NO_OWNER ? undefined : v })}>
-                      <SelectTrigger className="h-8 w-[150px] text-[12px]"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label={`${sourceName(src)}: кто ответственный`} className="h-8 w-[150px] text-[12px]"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value={NO_OWNER}>Кто принял</SelectItem>
                         <SelectItem value={OWNER_ROUND}>По очереди{ownerId && r.ownerId === OWNER_ROUND ? ` (сейчас ${s.users.find(u => u.id === ownerId)?.name ?? ""})` : ""}</SelectItem>

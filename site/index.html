@@ -35,7 +35,9 @@
             '</div></div>';
           document.getElementById("xxl-dump").onclick = function () {
             try {
-              var b = new Blob([localStorage.getItem(K) || "{}"], { type: "application/json" });
+              var raw = localStorage.getItem(K) || "{}";
+              try { var d = JSON.parse(raw); delete d.integrations; raw = JSON.stringify(d); } catch (e2) { void e2; }
+              var b = new Blob([raw], { type: "application/json" });
               var a = document.createElement("a");
               a.href = URL.createObjectURL(b); a.download = "xxlcrm-backup.json"; a.click();
             } catch (e) { alert("Не вышло сохранить копию: " + e); }

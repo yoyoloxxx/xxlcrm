@@ -19,7 +19,7 @@ function PresetCard({ p, onPick, onDelete }: { p: Preset; onPick: () => void; on
         <span className="min-w-0 flex-1">
           <span className="block text-[13.5px] font-medium">{p.label}</span>
           <span className="block truncate text-[11.5px] text-muted-foreground">{p.tagline}</span>
-          <span className="font-mono2 mt-0.5 block text-[10px] text-muted-foreground/70">{stages} стадий · {p.rules.length} автоматизаций{p.custom ? "" : " · примеры"}</span>
+          <span className="font-mono2 mt-0.5 block text-[10px] text-muted-foreground">{stages} стадий · {p.rules.length} автоматизаций{p.custom ? "" : " · примеры"}</span>
         </span>
         {!onDelete && <Check className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-70" />}
       </button>
@@ -66,7 +66,7 @@ export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplie
                 {" "}{counts.chats} {plural(counts.chats, "диалог", "диалога", "диалогов")},
                 {" "}{counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}
                 </b>{counts.mine > 0 && <> — из них <b className="font-medium text-foreground">{counts.mine} не из примеров</b></>}.
-                {" "}Вернуть — сразу Ctrl+Z. Свою базу лучше сначала выгрузить в CSV.
+                {" "}Вернуть — кнопкой «Отменить» в сообщении сразу после применения (или Ctrl+Z). Свою базу лучше сначала выгрузить в CSV.
               </DialogDescription>
             </DialogHeader>
             <div className="flex gap-2">

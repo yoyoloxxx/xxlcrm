@@ -151,7 +151,7 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                 <div className="text-[13px] font-medium">Воронка (стадии)</div>
                 <div className="text-[11.5px] text-muted-foreground">Канбан со стадиями; без неё раздел — просто таблица</div>
               </div>
-              <Switch checked={!!e.stages?.length} onCheckedChange={on => A.entToggleStages(e.id, on)} />
+              <Switch checked={!!e.stages?.length} aria-label="Воронка (стадии)" onCheckedChange={on => A.entToggleStages(e.id, on)} />
             </div>
             <div className="mt-4 rounded-lg border border-destructive/30 p-3">
               <div className="flex items-center justify-between gap-3">

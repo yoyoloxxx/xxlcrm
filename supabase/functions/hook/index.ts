@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.17"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.18"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -128,8 +128,15 @@ async function handleStart(ws: string, body: Any): Promise<boolean> {
   const text: string = m?.text ?? "";
   if (!m?.chat || !text.startsWith("/start")) return false;
   const arg = text.split(/\s+/)[1] ?? "";
-  if (!arg.startsWith("notify_")) return false;
-  if (!ws) return false;
+  if (!arg.startsWith("notify_") || !ws) return false;
+  // Бот публичный: его имя есть на сайте и в самой CRM, написать ему может кто угодно.
+  // Поэтому мало префикса — в ссылке-приглашении лежит метка пространства, и без неё
+  // подписка не оформляется. Иначе посторонний получал бы каждую заявку себе в личку.
+  const marker = arg.slice(7);
+  if (marker !== ws.slice(0, 8)) {
+    console.log("notify: чужая или пустая метка", marker);
+    return true;                      // молча: не подсказываем, что метка бывает правильной
+  }
   const name = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(" ") || m.from?.username || "";
   const { count } = await db.from("notify_targets").select("chat_id", { count: "exact", head: true }).eq("workspace_id", ws);
   if ((count ?? 0) < 10) await db.from("notify_targets").upsert({ workspace_id: ws, chat_id: String(m.chat.id), name });

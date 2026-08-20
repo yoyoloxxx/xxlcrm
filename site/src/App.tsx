@@ -148,8 +148,14 @@ export default function App() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const inField = () => { const t = e.target as HTMLElement | null; return !!t?.closest("input,textarea,[contenteditable]"); };
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette(v => !v); return; }
-      if (e.key === "/" && !inField()) { e.preventDefault(); setPalette(true); return; }
+      // Пока открыт модальный диалог, палитру не зовём: она всплывала ПОВЕРХ него, но фокус
+      // оставался в диалоге — ни набрать, ни закрыть. И действия из неё меняли данные вслепую.
+      const modalOpen = () => !!document.querySelector('[role="dialog"][data-state="open"]');
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        if (modalOpen()) return;
+        e.preventDefault(); setPalette(v => !v); return;
+      }
+      if (e.key === "/" && !inField()) { if (modalOpen()) return; e.preventDefault(); setPalette(true); return; }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         const t = e.target as HTMLElement | null;
         if (t && t.closest("input,textarea,[contenteditable]")) return;
@@ -179,7 +185,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.24</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.25</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -230,7 +236,7 @@ export default function App() {
                 page === "ent:" + sec.id ? "bg-foreground/[0.07] font-medium" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}>
               <EntIcon name={sec.icon} className="size-4" />
               <span className="min-w-0 flex-1 truncate">{sec.namePlural}</span>
-              <span className="font-mono2 text-[10.5px] text-muted-foreground/70">{recordsOf(sec.id).length}</span>
+              <span className="font-mono2 text-[10.5px] text-muted-foreground">{recordsOf(sec.id).length}</span>
             </button>
           ))}
           <button onClick={() => setNewEnt(true)}
@@ -322,7 +328,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.24 · четыре тысячи записей не морозят экран, двойной клик не портит данные</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.25 · встречные связи не роняют CRM, отмена есть и без клавиатуры, чужой не подпишется на заявки</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -333,9 +339,14 @@ export default function App() {
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
       <PresetPicker open={presets} onOpenChange={o => { setPresets(o); if (!o) setPresetsOnboarding(false); }} hasData={s.records.length > 0} onboarding={presetsOnboarding} onApplied={() => setPage("ent:deals")} />
       {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
-      <Toaster position="bottom-right" toastOptions={{ style: theme === "dark"
-        ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
-        : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" } }} />
+      {/* Описание в тосте раньше рисовалось приглушённым и давало контраст 1.49:1 —
+          то есть предупреждение «данные живут только до закрытия вкладки» было почти не видно. */}
+      <Toaster position="bottom-right" toastOptions={{
+        style: theme === "dark"
+          ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
+          : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" },
+        classNames: { description: theme === "dark" ? "!text-[hsl(40_12%_25%)]" : "!text-[hsl(45_30%_88%)]" },
+      }} />
     </div>
   );
 }
@@ -646,7 +657,7 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
                 <div key={a.id} className="flex items-baseline gap-2.5 text-[12px]">
                   <span className="font-mono2 shrink-0 text-[10.5px] text-muted-foreground">{relTime(a.ts)}</span>
                   <span className="min-w-0 flex-1 truncate" title={a.text}>{a.text}</span>
-                  {rec && <span className="max-w-[110px] shrink-0 truncate text-[10.5px] text-muted-foreground/70">{recTitle(a.recordId)}</span>}
+                  {rec && <span className="max-w-[110px] shrink-0 truncate text-[10.5px] text-muted-foreground">{recTitle(a.recordId)}</span>}
                 </div>
               );
             })}
@@ -665,7 +676,7 @@ function StorageAlarm() {
   const st = storageState();
   if (tab.follower && app.mode === "local") {
     return (
-      <div className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
+      <div role="alert" aria-live="assertive" className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
         <TriangleAlert className="size-4 shrink-0 text-destructive" />
         <span className="text-[12px] leading-snug text-destructive">
           <b className="font-semibold">CRM уже открыта в другой вкладке.</b> Здесь я ничего не сохраняю — иначе две вкладки
@@ -680,7 +691,7 @@ function StorageAlarm() {
   }
   if (!st.broken) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
+    <div role="alert" aria-live="assertive" className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
       <TriangleAlert className="size-4 shrink-0 text-destructive" />
       <span className="text-[12px] leading-snug text-destructive">
         <b className="font-semibold">База не сохраняется.</b> Браузер не даёт больше места ({Math.round(st.bytes / 1e5) / 10} МБ).

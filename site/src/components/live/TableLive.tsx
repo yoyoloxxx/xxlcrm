@@ -149,7 +149,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
                 <button className="truncate py-1 text-left font-medium underline-offset-2 hover:underline" onClick={() => A.openRecord(r.id)}>
                   {recTitle(r.id)}
                 </button>
-                <button className="rounded p-1 opacity-0 transition-opacity hover:bg-foreground/5 group-hover/row:opacity-100" title="Открыть карточку" onClick={() => A.openRecord(r.id)}>
+                <button className="rounded p-1 opacity-0 transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 group-hover/row:opacity-100" title="Открыть карточку" aria-label="Открыть карточку" onClick={() => A.openRecord(r.id)}>
                   <Maximize2 className="size-3 text-muted-foreground" />
                 </button>
               </div>
@@ -189,7 +189,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
                     return id;
                   })(); setQuick(""); } }}
                 placeholder={`Быстро добавить: ${e.name.toLowerCase()} + Enter`}
-                className="h-8 w-80 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/70"
+                className="h-8 w-80 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
               />
             </div>
           </td>

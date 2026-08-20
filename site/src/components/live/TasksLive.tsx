@@ -2,13 +2,14 @@
 import { useState } from "react";
 import type { Task } from "@/lib/model";
 import { DAY, fmtDate } from "@/lib/model";
-import { useApp, A, recById, recTitle, getState } from "@/lib/store";
+import { useApp, A, recById, recTitle, getState, toastUndo } from "@/lib/store";
 import { upcomingBirthdays, inDaysLabel, chatForRecord } from "@/lib/bday";
 import { fillTemplate } from "@/lib/fill";
 import { UserChip } from "./bits";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
+
 import { Cake, CalendarClock, ListChecks, MessageSquare, Phone, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -65,8 +66,11 @@ function TaskRow({ t, goInbox }: { t: Task; goInbox: () => void }) {
       )}
       <span className={cn("font-mono2 tnum shrink-0 text-[11.5px]", due.danger && !t.done ? "font-medium text-destructive" : "text-muted-foreground")}>{due.text}</span>
       <UserChip id={t.ownerId} />
-      <button className="press shrink-0 rounded p-1 text-muted-foreground/0 transition-colors hover:text-destructive group-hover:text-muted-foreground"
-        title="Удалить задачу" onClick={() => A.taskDelete(t.id)}>
+      {/* Кнопка была невидимой, но оставалась в порядке табуляции: Enter стирал задачу без
+          подтверждения и без единого следа. Теперь при фокусе она видна, а удаление отменяемо. */}
+      <button className="press shrink-0 rounded p-1 text-muted-foreground/0 transition-colors hover:text-destructive focus-visible:text-destructive focus-visible:outline focus-visible:outline-1 group-hover:text-muted-foreground"
+        title="Удалить задачу" aria-label={`Удалить задачу «${t.title}»`}
+        onClick={() => { A.taskDelete(t.id); toastUndo("Задача удалена"); }}>
         <Trash2 className="size-3.5" />
       </button>
     </div>

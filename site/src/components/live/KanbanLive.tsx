@@ -143,7 +143,12 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                     if (ev.key === "Enter" && quick.trim()) { A.createRecord(e.id, { [e.titleFieldId]: quick.trim() }, st.id); setQuick(""); }
                     if (ev.key === "Escape") { setQuickCol(null); setQuick(""); }
                   }}
-                  onBlur={() => { setQuickCol(null); setQuick(""); }}
+                  // Уход из поля не должен выбрасывать набранное: человек напечатал название,
+                  // кликнул мышью — и оно исчезало молча. Сохраняем то, что успел набрать.
+                  onBlur={() => {
+                    if (quick.trim()) A.createRecord(e.id, { [e.titleFieldId]: quick.trim() }, st.id);
+                    setQuickCol(null); setQuick("");
+                  }}
                   placeholder="Название + Enter"
                   className="rounded-md border bg-card px-2.5 py-2 text-[12.5px] outline-none focus:border-ring"
                 />

@@ -412,8 +412,8 @@ export function TemplatesLive() {
               <div className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{t.text}</div>
             </div>
             <div className="flex shrink-0 gap-1">
-              <button className="press grid h-7 w-7 place-items-center rounded-md border text-muted-foreground hover:text-foreground" onClick={() => startEdit(t.id)}><Pencil className="size-3" /></button>
-              <button className="press grid h-7 w-7 place-items-center rounded-md border text-muted-foreground hover:text-destructive" onClick={() => A.tplDelete(t.id)}><Trash2 className="size-3" /></button>
+              <button aria-label={`Изменить шаблон «${t.name}»`} title="Изменить" className="press grid h-7 w-7 place-items-center rounded-md border text-muted-foreground hover:text-foreground" onClick={() => startEdit(t.id)}><Pencil className="size-3" /></button>
+              <button aria-label={`Удалить шаблон «${t.name}»`} title="Удалить" className="press grid h-7 w-7 place-items-center rounded-md border text-muted-foreground hover:text-destructive" onClick={() => A.tplDelete(t.id)}><Trash2 className="size-3" /></button>
             </div>
           </div>
         ))}
@@ -422,7 +422,7 @@ export function TemplatesLive() {
           <div className="rounded-md border border-dashed p-3">
             <div className="flex items-center justify-between">
               <span className="text-[12px] font-medium">{editId ? "Редактирование шаблона" : "Новый шаблон"}</span>
-              <button onClick={() => { setEditId(null); setAdding(false); }}><X className="size-3.5 text-muted-foreground" /></button>
+              <button aria-label="Закрыть редактор шаблона" onClick={() => { setEditId(null); setAdding(false); }}><X className="size-3.5 text-muted-foreground" /></button>
             </div>
             <Input className="mt-2 h-9 text-[12.5px]" placeholder="Название" value={name} onChange={e => setName(e.target.value)} />
             <Textarea className="mt-2 text-[12.5px]" rows={3} placeholder="Текст с {переменными}…" value={text} onChange={e => setText(e.target.value)} />

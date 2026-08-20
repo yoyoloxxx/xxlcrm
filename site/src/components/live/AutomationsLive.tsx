@@ -210,7 +210,7 @@ export function AutomationsLive() {
                 <button className="press rounded p-1 text-muted-foreground/0 transition-colors hover:text-destructive group-hover:text-muted-foreground" title="Удалить" onClick={() => A.ruleDelete(r.id)}>
                   <Trash2 className="size-3.5" />
                 </button>
-                <Switch checked={r.enabled} onCheckedChange={() => A.ruleToggle(r.id)} />
+                <Switch checked={r.enabled} aria-label={`Правило «${r.name}»: ${r.enabled ? "включено" : "выключено"}`} onCheckedChange={() => A.ruleToggle(r.id)} />
               </div>
             </div>
           );

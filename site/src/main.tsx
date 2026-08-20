@@ -8,7 +8,11 @@ import App from './App.tsx'
 function rescue(err: unknown): ReactNode {
   const dump = () => {
     try {
-      const blob = new Blob([window.localStorage.getItem("xxlcrm-site-v1") ?? "{}"], { type: "application/json" });
+      // Ключи каналов и вход в личный Telegram в файл не кладём: аварийную копию человек
+      // отправляет себе на почту или в поддержку, а это доступ к переписке с клиентами.
+      let text = window.localStorage.getItem("xxlcrm-site-v1") ?? "{}";
+      try { const d = JSON.parse(text) as Record<string, unknown>; delete d.integrations; text = JSON.stringify(d); } catch { /* как есть */ }
+      const blob = new Blob([text], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "xxlcrm-backup.json";

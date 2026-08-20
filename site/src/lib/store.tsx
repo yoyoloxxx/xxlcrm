@@ -318,6 +318,11 @@ function closeStep() {
 export const undoDepth = () => history.length + (openShot ? 1 : 0);
 export const undoLabel = () => history[history.length - 1]?.label ?? "";
 
+/** Тост с кнопкой отмены: на телефоне Ctrl+Z нажать нечем, а обещания «Ctrl+Z вернёт» были везде. */
+export function toastUndo(text: string, description?: string) {
+  toast(text, { description, duration: 12000, action: { label: "Отменить", onClick: () => { undo(); } } });
+}
+
 export function undo(): boolean {
   closeStep();                                   // если жмут Ctrl+Z в том же такте
   const step = history.pop();
@@ -449,13 +454,24 @@ export function missingRequired(recId: string): Field[] {
   return entityCfg(r.entityId).fields.filter(f => f.required && isBlank(r.values[f.id]));
 }
 
-export function recTitle(id?: string): string {
+// Если у записи нет названия, показываем название связанной — но ХОДИМ ПО КРУГУ ОСТОРОЖНО.
+// Два раздела, ссылающиеся друг на друга, обе записи без заголовка — и рекурсия уходила в
+// бесконечность: белый экран, который переживал перезагрузку (яд лежал в хранилище) и повторялся
+// после загрузки скачанной копии. Собиралось это обычными кликами в конструкторе.
+export function recTitle(id?: string, seen?: Set<string>): string {
   const r = recById(id ?? undefined); if (!r) return "";
   const e = entityCfg(r.entityId);
   const t = String(r.values[e.titleFieldId] ?? "").trim();
   if (t) return t;
   const rel = e.fields.find(f => f.type === "relation" && r.values[f.id]);
-  if (rel) { const inner = recTitle(r.values[rel.id] as string); if (inner) return inner; }
+  if (rel) {
+    const path = seen ?? new Set<string>();
+    if (!path.has(r.id) && path.size < 4) {
+      path.add(r.id);
+      const inner = recTitle(r.values[rel.id] as string, path);
+      if (inner) return inner;
+    }
+  }
   return `${e.name} №${r.num}`;
 }
 export const dispCtx = () => ({ recTitle, userName });
@@ -803,7 +819,7 @@ export const A = {
         pushAct(r.id, "field", `Ответственный: ${userName(userId)}`, s.currentUserId);
       }
     });
-    toast(`Ответственный назначен: ${userName(userId)}`, { description: "Ctrl+Z вернёт" });
+    toastUndo(`Ответственный назначен: ${userName(userId)}`);
 
   },
   bulkTask(ids: string[], title: string, kind: Task["kind"], dueOffsetH: number) {
@@ -827,7 +843,7 @@ export const A = {
       s.chats.forEach(c => { if (c.recordId && set.has(c.recordId)) c.recordId = undefined; });
       if (s.drawerRecordId && set.has(s.drawerRecordId)) s.drawerRecordId = null;
     });
-    toast(`Удалено: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`, { description: "Ctrl+Z вернёт" });
+    toastUndo(`Удалено: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`);
   },
   // слить дубли: всё из второй карточки переезжает в первую, вторая удаляется
   mergeRecords(keepId: string, dropId: string) {
@@ -849,7 +865,7 @@ export const A = {
       if (s.drawerRecordId === dropId) s.drawerRecordId = keepId;
       pushAct(keepId, "comment", "Объединено с дублем", s.currentUserId);
     });
-    toast.success("Карточки объединены", { description: "Ctrl+Z вернёт" });
+    toastUndo("Карточки объединены");
   },
   deleteRecord(recId: string) {
     pushHistory("удаление записи");
@@ -862,7 +878,7 @@ export const A = {
       s.activities = s.activities.filter(a => a.recordId !== recId);
       if (s.drawerRecordId === recId) s.drawerRecordId = null;
     });
-    toast("Запись удалена — Ctrl+Z, чтобы вернуть");
+    toastUndo("Запись удалена");
   },
   addComment(recId: string, text: string) { mut(s => pushAct(recId, "comment", text, s.currentUserId)); },
   addTask(recId: string | undefined, title: string, kind: Task["kind"], dueOffsetH: number) {
@@ -1064,7 +1080,7 @@ export const A = {
   },
   tplAdd(name: string, text: string) { mut(s => s.replyTemplates.push({ id: uid("tpl"), name, text })); },
   tplUpdate(id: string, patch: Partial<ReplyTemplate>) { mut(s => Object.assign(s.replyTemplates.find(t => t.id === id)!, patch)); },
-  tplDelete(id: string) { pushHistory("удаление шаблона"); mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); toast("Шаблон удалён — Ctrl+Z вернёт"); },
+  tplDelete(id: string) { pushHistory("удаление шаблона"); mut(s => { s.replyTemplates = s.replyTemplates.filter(t => t.id !== id); }); toastUndo("Шаблон удалён"); },
   // ---------- автоматизации ----------
   ruleAdd(rule: Omit<Rule, "id" | "fired">): string {
     const id = uid("rule");
@@ -1075,7 +1091,7 @@ export const A = {
     mut(s => { const r = s.automations.find(x => x.id === id); if (r) Object.assign(r, patch); });
   },
   ruleToggle(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.enabled = !r.enabled; }); },
-  ruleDelete(id: string) { pushHistory("удаление правила"); mut(s => { s.automations = s.automations.filter(x => x.id !== id); }); toast("Правило удалено — Ctrl+Z вернёт"); },
+  ruleDelete(id: string) { pushHistory("удаление правила"); mut(s => { s.automations = s.automations.filter(x => x.id !== id); }); toastUndo("Правило удалено"); },
   ruleFired(id: string) { mut(s => { const r = s.automations.find(x => x.id === id); if (r) r.fired++; }); },
   goto(page: string) { mut(s => { s.nav = { page, tick: (s.nav?.tick ?? 0) + 1 }; }); },
 
@@ -1133,6 +1149,10 @@ export const A = {
   },
   removeCustomPreset(id: string) { deleteCustomPreset(id); emit(); toast("Шаблон удалён"); },
   entToggleStages(id: string, on: boolean) {
+    // Один щелчок обнулял стадию у ВСЕХ записей раздела, и где кто был в воронке,
+    // не хранилось больше нигде. Это был единственный экшен конструктора без отмены.
+    pushHistory(on ? "включение воронки" : "выключение воронки");
+    const n = st.records.filter(r => r.entityId === id && r.stageId).length;
     mut(s => {
       const e = s.entities.find(x => x.id === id); if (!e) return;
       if (on && !e.stages?.length) {
@@ -1145,6 +1165,7 @@ export const A = {
       }
       repairAndTell(s);
     });
+    if (!on && n) toastUndo(`Воронка выключена: ${n} ${plural(n, "запись потеряла", "записи потеряли", "записей потеряли")} стадию`, "Вернуть всё как было");
   },
   entDelete(id: string): boolean {
     const used = st.entities.find(e => e.id !== id && e.fields.some(f => f.type === "relation" && f.relationTo === id));
@@ -1222,7 +1243,9 @@ export const A = {
     mut(s => {
       const en = s.entities.find(x => x.id === entityId)!;
       en.stages = en.stages!.filter(x => x.id !== stageId);
-      const first = en.stages[0];
+      // В первую РАБОЧУЮ, а не в stages[0]: если удалить первую стадию, а следующей окажется
+      // «Провал», все висевшие на ней сделки молча становились проигранными.
+      const first = en.stages.find(x => x.kind === "open") ?? en.stages[0];
       s.records.forEach(r => {
         if (r.entityId === entityId && r.stageId === stageId) {
           r.stageId = first.id; r.stageAt = now(); moved++;
