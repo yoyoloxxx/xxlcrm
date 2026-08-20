@@ -24,6 +24,21 @@ const openFirst = async () => {
   }
   return false;
 };
+// Открывать «первую строку» после перезагрузки нельзя: порядок в таблице может измениться,
+// и вторая правка уедет в ЧУЖУЮ карточку. Запоминаем имя и возвращаемся именно к ней.
+const имяПервой = (await p.locator("table tbody tr").first().locator("td").nth(1).innerText()).trim().split("\n")[0];
+const openByName = async (name) => {
+  for (let i = 0; i < 6; i++) {
+    const row = p.locator("table tbody tr", { hasText: name }).first();
+    if (await row.count()) {
+      await row.locator("td").nth(1).locator("button").first().click();
+      await p.waitForTimeout(500);
+      if (await p.locator("[data-drawer]").count()) return true;
+    }
+    await p.waitForTimeout(400);
+  }
+  return false;
+};
 ok("Карточка клиента открывается", await openFirst());
 
 const dateInputs = p.locator('[data-drawer] input[aria-label="Дата"]');
@@ -55,11 +70,41 @@ await di.press("Enter"); await p.waitForTimeout(500);
 ok("D1 редактор не закрылся на непонятой дате", (await di.count()) > 0 && (await di.inputValue()) === "31.31.2026", await di.inputValue());
 ok("D2 показано, что дата не понята", /Не понял дату/.test(await p.locator("[data-drawer]").innerText()));
 
+// Ждём СОБЫТИЕ, а не секунды: под нагрузкой (все наборы разом) сохранение не укладывалось
+// в фиксированную паузу, перезагрузка съедала правку — и тест «моргал» на ровном месте.
+// Формат хранения даты знать не нужно: ждём, пока записи в хранилище просто перестанут
+// совпадать с тем, что было до правки.
+const слепок = () => p.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem("xxlcrm-site-v1") ?? "{}").records ?? []));
+const ждатьЗаписи = async (было, что) => {
+  await p.waitForFunction(prev => {
+    try { return JSON.stringify(JSON.parse(localStorage.getItem("xxlcrm-site-v1") ?? "{}").records ?? []) !== prev; }
+    catch { return false; }
+  }, было, { timeout: 15000 }).catch(() => { console.log("  … не дождался: " + что); });
+};
+const ждатьЗадачуДР = async (что) => {
+  await p.waitForFunction(() => {
+    try { return (JSON.parse(localStorage.getItem("xxlcrm-site-v1") ?? "{}").tasks ?? []).some(t => String(t.id).startsWith("t_bday_")); }
+    catch { return false; }
+  }, null, { timeout: 15000 }).catch(() => { console.log("  … не дождался: " + что); });
+};
+const перезагрузить = async () => {
+  await p.reload();
+  await p.waitForFunction(() => document.querySelectorAll("button").length > 5, null, { timeout: 20000 }).catch(() => {});
+  // Приложение загрузилось — но напоминания о днях рождения пересчитываются уже ПОСЛЕ загрузки.
+  // Ждём именно от момента готовности, а не от начала перезагрузки: под нагрузкой сама
+  // загрузка съедала всю паузу, и тест читал состояние до пересчёта.
+  await p.waitForTimeout(3000);
+  await p.keyboard.press("Escape");
+};
+
 // ---------- E: поправленный день рождения двигает напоминание ----------
 const soon = new Date(Date.now() + 3 * 86400000);
 const soonStr = `${String(soon.getDate()).padStart(2, "0")}.${String(soon.getMonth() + 1).padStart(2, "0")}.1990`;
-await di.fill(soonStr); await di.press("Enter"); await p.waitForTimeout(1200);
-await p.reload(); await p.waitForTimeout(3600); await p.keyboard.press("Escape");
+const былоE = await слепок();
+await di.fill(soonStr); await di.press("Enter");
+await ждатьЗаписи(былоE, "дата рождения сохранилась");
+await перезагрузить();
+await ждатьЗадачуДР("напоминание о дне рождения создалось");
 const bTasks = (s) => (s.tasks ?? []).filter(t => t.id.startsWith("t_bday_") && !t.done);
 const first = bTasks(await st());
 ok("E1 напоминание «поздравить» появилось", first.length > 0, first.map(t => new Date(t.due).toLocaleDateString("ru-RU")).join(", "));
@@ -68,13 +113,15 @@ ok("E1 напоминание «поздравить» появилось", firs
 await p.getByRole("button", { name: /Клиенты/ }).first().click(); await p.waitForTimeout(400);
 await p.getByRole("button", { name: "Таблица" }).click().catch(() => {});
 await p.waitForTimeout(400);
-await openFirst();
+ok("E1a вернулись в ТУ ЖЕ карточку", await openByName(имяПервой), имяПервой);
 const soon2 = new Date(Date.now() + 5 * 86400000);
 const soon2Str = `${String(soon2.getDate()).padStart(2, "0")}.${String(soon2.getMonth() + 1).padStart(2, "0")}.1990`;
+const былоE2 = await слепок();
 await p.locator('[data-drawer] input[aria-label="Дата"]').first().fill(soon2Str);
 await p.locator('[data-drawer] input[aria-label="Дата"]').first().press("Enter");
-await p.waitForTimeout(1000);
-await p.reload(); await p.waitForTimeout(3600); await p.keyboard.press("Escape");
+await ждатьЗаписи(былоE2, "новая дата сохранилась");
+await перезагрузить();
+await ждатьЗадачуДР("напоминание пересчиталось");
 const stAfter = await st();
 // смотрим ТОЛЬКО задачи по той записи, которую правили: у других клиентов свои дни рождения
 const recId = first[0]?.recordId ?? null;
