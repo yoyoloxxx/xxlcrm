@@ -51,6 +51,10 @@ do $$
 declare t text;
 begin
   foreach t in array array['records','tasks'] loop
+    -- старые общие политики называются rec_all / task_all: если их не снять, они
+    -- останутся действовать ПАРАЛЛЕЛЬНО (разрешения складываются) и ограничение на
+    -- удаление окажется бесполезным
+    execute format('drop policy if exists %I on public.%I', case t when 'records' then 'rec_all' else 'task_all' end, t);
     execute format('drop policy if exists %I on public.%I', t || '_all', t);
     execute format('drop policy if exists %I on public.%I', t || '_sel', t);
     execute format('drop policy if exists %I on public.%I', t || '_ins', t);
