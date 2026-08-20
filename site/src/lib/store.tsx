@@ -29,6 +29,22 @@ interface State extends DataState {
 
 // ---------- адаптер персистентности (при Supabase заменяется целиком этот объект) ----------
 const LS_KEY = "xxlcrm-site-v1";
+
+// Разметка примеров в базах, сохранённых до появления метки demo: сверяем состав с заводским
+// набором. Трогаем только те записи, чей раздел и заголовок совпали в точности.
+function markLegacyDemo(d: { records?: unknown; tasks?: unknown; chats?: unknown }): void {
+  const recs = Array.isArray(d.records) ? (d.records as Rec[]) : [];
+  if (!recs.length || recs.some(r => "demo" in r)) return;   // уже размечено — не вмешиваемся
+  const ex = seed();
+  const sig = (e: string, t: unknown) => e + "|" + String(t ?? "").trim();
+  const rs = new Set(ex.records.map(r => sig(r.entityId, r.values.title)));
+  const ts = new Set(ex.tasks.map(t => t.title));
+  const cs = new Set(ex.chats.map(c => c.name));
+  for (const r of recs) if (rs.has(sig(r.entityId, r.values.title))) r.demo = true;
+  if (Array.isArray(d.tasks)) for (const t of d.tasks as Task[]) if (ts.has(t.title)) t.demo = true;
+  if (Array.isArray(d.chats)) for (const c of d.chats as Chat[]) if (cs.has(c.name)) c.demo = true;
+}
+
 const persistence = {
   load(): DataState | null {
     try {
@@ -52,6 +68,10 @@ const persistence = {
       for (const k of ["tasks", "activities", "chats", "automations", "routes", "replyTemplates"]) {
         if (d[k] !== undefined && !Array.isArray(d[k])) d[k] = undefined;
       }
+      // Метка demo появилась в v0.27. У тех, кто открыл CRM раньше, примеры лежат БЕЗ неё:
+      // «Очистить примеры» им не убирало ничего, а переход в облако предлагал перенести
+      // шесть чужих компаний и восемь чужих сделок как «уже наработанное».
+      markLegacyDemo(d);
       const ints = { ...defaultIntegrations(), ...(d.integrations ?? {}) } as Integrations;
       // после перезагрузки поднимаем сохранённые подключения обратно в ok
       ints.tg.status = ints.tg.token ? "ok" : "off";
