@@ -2,6 +2,7 @@
 // Принцип «не переделывать»: компоненты и экшены A.* не знают про облако — cloud.ts
 // подписывается на cloudHooks.save и превращает изменения стора в точечные upsert/delete.
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import { recDiff, type Merge } from "./recdiff";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
@@ -501,10 +502,52 @@ async function doSave(): Promise<void> {
     for (const c of collections) {
       const seen = new Set<string>();
       const changed: { id: string; j: string; row: Row }[] = [];
+      const merges: Merge[] = [];
       for (const item of c.items) {
         seen.add(item.id);
         const j = canon(item);
-        if (snap[c.table].get(item.id) !== j) changed.push({ id: item.id, j, row: c.toRow(item as never) });
+        const was = snap[c.table].get(item.id);
+        if (was === j) continue;
+        // Существующая карточка — шлём только свои поля. Новая (в базе её ещё нет) — целиком.
+        if (c.table === "records" && was && mergeReady) {
+          const d = recDiff(JSON.parse(was) as Rec, item as unknown as Rec);
+          if (d) { merges.push(d); continue; }
+        }
+        changed.push({ id: item.id, j, row: c.toRow(item as never) });
+      }
+      for (let i = 0; i < merges.length; i += 200) {
+        const part = merges.slice(i, i + 200);
+        const { data, error } = await supa.rpc("rec_merge_many", { p_ws: wsId, p_items: part });
+        if (error) {
+          if (noSuchFn(error.message)) {
+            // Откатываемся на полную запись прямо в этом же проходе — человек ничего не теряет.
+            mergeReady = false;
+            for (const m of merges.slice(i)) {
+              const it = getState().records.find(r => r.id === m.id);
+              if (it) changed.push({ id: it.id, j: canon(it), row: M.records.toRow(it) });
+            }
+            console.warn("слияние по полям недоступно — пишу карточки целиком");
+            break;
+          }
+          problems.push("records (слияние): " + error.message);
+          break;
+        }
+        const back = ((data ?? []) as Row[]).map(r => M.records.fromRow(r));
+        const got = new Set(back.map(r => r.id));
+        // Ответ базы — это уже склейка: мои правки поверх того, что успели изменить коллеги.
+        // Забираем её к себе целиком, иначе на экране останется моя устаревшая версия.
+        applyRemote(st2 => {
+          for (const inc of back) {
+            const k = st2.records.findIndex(r => r.id === inc.id);
+            if (k >= 0) st2.records[k] = inc;
+            snap.records.set(inc.id, canon(inc));
+          }
+        });
+        // Строки на сервере не оказалось: завели офлайн или коллега удалил. Заливаем целиком.
+        for (const m of part) if (!got.has(m.id)) {
+          const it = getState().records.find(r => r.id === m.id);
+          if (it) changed.push({ id: it.id, j: canon(it), row: M.records.toRow(it) });
+        }
       }
       // Строку, которую мы намеренно перестали выгружать (личный диалог), нельзя молча
       // сносить в облаке: удаление — отдельное осознанное действие человека, не побочный эффект.
@@ -539,6 +582,12 @@ async function doSave(): Promise<void> {
     if (dirtyAgain) { dirtyAgain = false; void doSave(); }
   }
 }
+
+// ---------- слияние по полям ----------
+// Функции может не быть: миграцию ещё не накатили, а код уже на сайте. Тогда работаем
+// по-старому — карточкой целиком. Молча ломать сохранение из-за этого нельзя.
+let mergeReady = true;
+const noSuchFn = (msg: string) => /rec_merge_many|PGRST202|does not exist|not find the function|schema cache/i.test(msg);
 
 // ---------- realtime: чужие изменения приходят сами ----------
 function subscribeRealtime(id: string): void {
