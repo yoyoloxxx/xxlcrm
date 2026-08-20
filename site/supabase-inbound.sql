@@ -63,7 +63,9 @@ begin
     execute format('create policy %I on public.%I for select using (public.is_member(workspace_id))', t || '_sel', t);
     execute format('create policy %I on public.%I for insert with check (public.is_member(workspace_id))', t || '_ins', t);
     execute format('create policy %I on public.%I for update using (public.is_member(workspace_id)) with check (public.is_member(workspace_id))', t || '_upd', t);
-    execute format('create policy %I on public.%I for delete using (public.is_member(workspace_id) and (owner_id = auth.uid() or public.is_owner(workspace_id)))', t || '_del', t);
+    -- ВНИМАНИЕ: records.owner_id и tasks.owner_id — text, а auth.uid() возвращает uuid.
+    -- Без приведения типов Postgres отказывается сравнивать: «operator does not exist: text = uuid».
+    execute format('create policy %I on public.%I for delete using (public.is_member(workspace_id) and (owner_id = auth.uid()::text or public.is_owner(workspace_id)))', t || '_del', t);
   end loop;
 end $$;
 
