@@ -115,6 +115,29 @@ export async function signOutCloud(): Promise<void> {
   window.location.reload();  // чистый возврат в демо-режим
 }
 
+const LAST_WS = "xxl-ws-last";   // куда возвращаться, если пространств несколько
+
+/** Пространства, в которых человек состоит. Нужны, чтобы было куда переключиться. */
+export async function myWorkspaces(): Promise<{ id: string; name: string; owner: boolean }[]> {
+  const u = (await supa.auth.getUser()).data.user;
+  if (!u) return [];
+  const { data, error } = await supa.from("members").select("workspace_id, role, workspaces(name)").eq("user_id", u.id);
+  if (error || !data) return [];
+  return data.map((m: Row) => ({
+    id: String(m.workspace_id),
+    name: String((m.workspaces as { name?: string } | null)?.name ?? "Пространство"),
+    owner: m.role === "owner",
+  })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+/** Перейти в другое своё пространство, не выходя из аккаунта. */
+export async function switchWs(id: string): Promise<string | null> {
+  const u = (await supa.auth.getUser()).data.user;
+  if (!u) return "Сессия истекла — войдите заново";
+  await openWorkspace(id, u.id);
+  return null;
+}
+
 async function afterLogin(): Promise<void> {
   const u = (await supa.auth.getUser()).data.user;
   if (!u) return;
@@ -124,7 +147,15 @@ async function afterLogin(): Promise<void> {
     .eq("user_id", u.id);
   if (error) { toast.error("Облако: " + ruAuthErr(error.message)); return; }
   if (!data?.length) { setAuthStage("ws"); return; }
-  await openWorkspace(String(data[0].workspace_id), u.id);
+  // Раньше открывалось data[0] — то есть какое придётся. У человека с двумя пространствами
+  // CRM после перезагрузки показывала не то, где лежит работа, и вернуться было нечем.
+  let last: string | null = null;
+  try { last = window.localStorage.getItem(LAST_WS); } catch { /* приватный режим */ }
+  const rows = data as Row[];
+  const pick = rows.find(m => String(m.workspace_id) === last)
+    ?? rows.find(m => m.role === "owner")
+    ?? rows[0];
+  await openWorkspace(String(pick.workspace_id), u.id);
 }
 
 /** Сколько в локальной базе НЕ демо — чтобы спросить человека ДО перехода, а не после. */
@@ -346,6 +377,7 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
 
   cloudHooks.save = scheduleSave;
   cloudPendingHook.has = () => saving || dirtyAgain || cloudBroken;
+  try { window.localStorage.setItem(LAST_WS, id); } catch { /* приватный режим */ }
   subscribeRealtime(id);
   void inboundBoot(id);      // что сервер принял, пока приложение было закрыто
   inboundSubscribe(id);

@@ -1,7 +1,7 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
 import { useEffect, useMemo, useState } from "react";
 import { useApp, setAuthStage, getState } from "@/lib/store";
-import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere } from "@/lib/cloud";
+import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere, myWorkspaces, switchWs } from "@/lib/cloud";
 import { plural } from "@/lib/model";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -213,10 +213,41 @@ export function TeamLive() {
           Приглашает сотрудников владелец пространства — код есть только у него.
         </p>
       )}
+      <WsSwitch />
       <MoveBackup />
       <Button variant="outline" size="sm" className="mt-2.5 h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
         <LogOut className="size-3.5" /> Выйти из аккаунта
       </Button>
+    </div>
+  );
+}
+
+// Если пространств несколько — надо иметь возможность перейти в другое, не выходя из аккаунта.
+// Раньше после перезагрузки открывалось какое придётся, и попасть в нужное было нечем.
+function WsSwitch() {
+  const s = useApp();
+  const [list, setList] = useState<{ id: string; name: string; owner: boolean }[]>([]);
+  const [busy, setBusy] = useState("");
+  useEffect(() => { void myWorkspaces().then(setList); }, [s.wsId]);
+  if (list.length < 2) return null;
+  return (
+    <div className="mt-2.5 rounded-md border border-dashed px-3 py-2.5">
+      <div className="text-[12px] font-medium">Ваши пространства</div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {list.map(w => (
+          <Button key={w.id} variant="outline" size="sm"
+            className={cn("h-7 text-[11.5px]", w.id === s.wsId && "border-foreground/30 font-medium")}
+            disabled={!!busy || w.id === s.wsId}
+            onClick={async () => {
+              setBusy(w.id);
+              const bad = await switchWs(w.id);
+              setBusy("");
+              if (bad) toast.error(bad);
+            }}>
+            {busy === w.id ? "Открываю…" : w.name}{w.id === s.wsId ? " · вы здесь" : ""}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }
