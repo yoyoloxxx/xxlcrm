@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, clone, ruleHooks } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
@@ -298,7 +298,12 @@ function onRemote(table: keyof typeof snap, eventType: string, row: Row): void {
     if (local && local.updatedAt > inc.updatedAt) return;      // у нас свежее — не даём эху откатить правки
     if (snap.records.get(inc.id) === canon(inc)) return;       // эхо собственной записи
     snap.records.set(inc.id, canon(inc));
+    const isNew = !local;
     applyRemote(s => { const i = s.records.findIndex(r => r.id === inc.id); if (i >= 0) s.records[i] = inc; else s.records.push(inc); });
+    // Заявку из Telegram/WhatsApp/MAX/сайта создаёт сервер — в браузере createRecord не вызывался,
+    // и правило «создана запись» молчало. Теперь событие даём и на пришедшую извне запись:
+    // id задачи детерминированный, поэтому дубля у второго участника команды не будет.
+    if (isNew) queueMicrotask(() => ruleHooks.created?.(inc.id));
   } else if (table === "tasks") {
     const inc = M.tasks.fromRow(row);
     if (snap.tasks.get(inc.id) === canon(inc)) return;

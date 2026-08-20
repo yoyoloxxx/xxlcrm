@@ -84,13 +84,19 @@ export const HEADER_HINTS: { re: RegExp; type: string[]; ids?: string[] }[] = [
   { re: /(ответствен|менеджер|owner|manager)/i, type: ["user"] },
 ];
 
-/** Число из ячейки: «12 000,50», «1 234», «1,234.56», «50 000 ₽», «(1 200)» — всё это деньги.
+/** Число из ячейки: «12 000,50», «1 234», «1,234.56», «50 000 ₽», «(1 200)», «1,5E+09», «5 000-» (1С), «−5 000».
     Русский и английский форматы различаем по позиции последнего разделителя. */
 export function parseNumCell(raw: string): number | null {
-  let s = String(raw).trim();
+  let s = String(raw).trim().replace(/\u2212|\u2013|\u2014/g, "-");   // типографский минус из Excel и Word
   if (!s) return null;
-  const neg = /^\(.*\)$/.test(s) || /^-/.test(s);
-  s = s.replace(/[()]/g, "").replace(/^[-+]/, "");
+  // 1С и некоторые выгрузки ставят минус В КОНЦЕ: «5 000-»
+  const trailingNeg = /-\s*$/.test(s);
+  const neg = trailingNeg || /^\(.*\)$/.test(s) || /^-/.test(s);
+  s = s.replace(/[()]/g, "").replace(/^[-+]/, "").replace(/-\s*$/, "");
+  // экспоненциальная запись: Excel показывает большие числа как 1,09E+09 — раньше читалось как «109»
+  const exp = /^([\d\s.,]+)[eE]\s*([+-]?\d+)$/.exec(s);
+  const expPow = exp ? Number(exp[2]) : 0;
+  if (exp) s = exp[1];
   s = s.replace(/[^\d.,]/g, "");            // убираем ₽, $, пробелы, NBSP, буквы
   if (!s) return null;
   const lastDot = s.lastIndexOf("."), lastCom = s.lastIndexOf(",");
@@ -103,7 +109,8 @@ export function parseNumCell(raw: string): number | null {
   }
   intPart = intPart.replace(/[.,]/g, "");
   if (!intPart && !frac) return null;
-  const n = Number((intPart || "0") + (frac ? "." + frac : ""));
+  let n = Number((intPart || "0") + (frac ? "." + frac : ""));
   if (isNaN(n)) return null;
+  if (expPow) n = n * Math.pow(10, expPow);
   return neg ? -n : n;
 }

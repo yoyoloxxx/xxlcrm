@@ -109,9 +109,20 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
       stageId: stageId || undefined,
       ownerId: ownerId || undefined,
     });
-    toast.success(`Загружено: ${res.created} ${plural(res.created, "запись", "записи", "записей")}`, {
-      description: [res.merged ? `объединено с существующими: ${res.merged}` : "", "Ctrl+Z отменит импорт целиком"].filter(Boolean).join(" · "),
-    });
+    // Отчёт без умолчаний: что склеилось, что не разобралось, что завелось само.
+    const parts = [
+      res.merged ? `объединено по телефону: ${res.merged}` : "",
+      res.related ? `заодно заведено связанных карточек: ${res.related}` : "",
+      res.badDates ? `не понял дат: ${res.badDates} (проверьте формат — жду дд.мм.гггг)` : "",
+      res.unknownStages.length ? `стадии не найдены и заменены на первую: ${res.unknownStages.join(", ")}` : "",
+      res.optionsCapped ? "в колонке-списке слишком много разных значений — остальные не добавлял" : "",
+      "Ctrl+Z отменит импорт целиком",
+    ].filter(Boolean);
+    const noisy = res.badDates || res.unknownStages.length || res.optionsCapped;
+    (noisy ? toast.warning : toast.success)(
+      `Загружено: ${res.created} ${plural(res.created, "запись", "записи", "записей")}`,
+      { duration: noisy ? 20000 : 6000, description: parts.join(" · ") },
+    );
     setBusy(false);
     onOpenChange(false);
     reset();
@@ -210,8 +221,10 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
                   </Select>
                 </div>
                 <p className="text-[11px] leading-snug text-muted-foreground">
-                  Автоматизации на загруженные записи не срабатывают — иначе старая база породила бы сотни задач.
-                  Неизвестные значения списков и новых клиентов создам на лету.
+                  Правило «создана запись» на загруженные строки не сработает. Но правила «застряла на стадии»
+                  и «тишина N дней» увидят их при ближайшей проверке — если не хотите задач по старой базе,
+                  выключите эти правила на время в «Автоматизациях». Неизвестные значения списков и новых клиентов создам на лету
+                  и отчитаюсь, что именно завёл.
                 </p>
               </div>
             </div>

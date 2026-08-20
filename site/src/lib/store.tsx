@@ -634,8 +634,10 @@ export const A = {
     mapping: (string | null)[],
     rows: string[][],
     opts: { mergeByPhone?: boolean; stageId?: string; ownerId?: string } = {}
-  ): { created: number; merged: number } {
-    let created = 0, merged = 0;
+  ): { created: number; merged: number; badDates: number; unknownStages: string[]; related: number; options: number; optionsCapped: boolean } {
+    let created = 0, merged = 0, badDates = 0, related = 0, options = 0, optionsCapped = false;
+    const unknownStages = new Set<string>();
+    const OPTION_CAP = 60;      // 3 000 значений из файла превращали конфиг раздела в кирпич
     pushHistory("загрузку из файла");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId)!;
@@ -668,6 +670,7 @@ export const A = {
           if (target === "__stage") {
             const st2 = e.stages?.find(x => x.label.toLowerCase() === raw.toLowerCase());
             if (st2) stageId = st2.id;
+            else unknownStages.add(raw);           // «Отказ» из чужой CRM не должен молча уехать в работу
             return;
           }
           const f = fieldOf(target); if (!f) return;
@@ -678,13 +681,18 @@ export const A = {
               break;
             }
             case "date": case "datetime": {
-              const ts = parseRuDate(raw); if (ts) values[f.id] = ts;
+              const ts = parseRuDate(raw);
+              if (ts) values[f.id] = ts; else badDates++;    // молча выбрасывать даты нельзя — скажем сколько
               break;
             }
             case "select": {
               if (!f.options) f.options = [];
               let o = f.options.find(x => x.label.toLowerCase() === raw.toLowerCase());
-              if (!o) { o = { id: uid("o"), label: raw, color: PALETTE[f.options.length % PALETTE.length] }; f.options.push(o); }
+              if (!o) {
+                if (f.options.length >= OPTION_CAP) { optionsCapped = true; break; }  // это уже не список, а свободный текст
+                o = { id: uid("o"), label: raw, color: PALETTE[f.options.length % PALETTE.length] };
+                f.options.push(o); options++;
+              }
               values[f.id] = o.id;
               break;
             }
@@ -706,6 +714,7 @@ export const A = {
               };
               s.records.push(nr);
               byTitle.set(titleKey(target2.id, raw), nr);
+              related++;                            // об этом скажем в отчёте: файл на 300 строк заводил 600 записей
               values[f.id] = nr.id;
               break;
             }
@@ -736,7 +745,7 @@ export const A = {
       }
     });
     if (created || merged) markSetup("imported");
-    return { created, merged };
+    return { created, merged, badDates, unknownStages: [...unknownStages].slice(0, 5), related, options, optionsCapped };
   },
   // ---------- массовые действия: одна мутация и одна отмена на всю пачку ----------
   bulkStage(ids: string[], stageId: string) {
@@ -835,10 +844,13 @@ export const A = {
   },
   taskAddAt(id: string | null, title: string, kind: Task["kind"], dueTs: number, recId?: string): boolean {
     if (id && st.tasks.some(t => t.id === id)) return false; // напоминание уже есть (в т.ч. выполненное)
+    // Человек удалил задачу от правила — значит, не надо. Раньше следующий скан ставил её заново,
+    // и так до бесконечности. След в хронике остаётся навсегда и служит меткой «уже ставили».
+    if (id && recId && st.activities.some(a => a.editKey === id)) return false;
     mut(s => {
       const r = recId ? s.records.find(x => x.id === recId) : undefined;
       s.tasks.push({ id: id ?? uid("t"), title, kind, recordId: recId, ownerId: r?.ownerId ?? s.currentUserId, due: dueTs, done: false });
-      if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId);
+      if (recId) pushAct(recId, "task", `Задача: ${title}`, s.currentUserId, id ?? undefined);
     });
     return true;
   },
