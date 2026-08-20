@@ -240,9 +240,11 @@ function WsSwitch() {
             disabled={!!busy || w.id === s.wsId}
             onClick={async () => {
               setBusy(w.id);
-              const bad = await switchWs(w.id);
-              setBusy("");
-              if (bad) toast.error(bad);
+              let bad: string | null = null;
+              try { bad = await switchWs(w.id); }
+              catch (e) { bad = String((e as Error).message ?? e).slice(0, 160); }
+              finally { setBusy(""); }
+              if (bad) toast.error("Не открылось: " + bad);
             }}>
             {busy === w.id ? "Открываю…" : w.name}{w.id === s.wsId ? " · вы здесь" : ""}
           </Button>
@@ -278,8 +280,12 @@ function MoveBackup() {
             <Button size="sm" className="h-7 text-[11.5px]" disabled={busy}
               onClick={async () => {
                 setBusy(true);
-                const bad = await moveBackupHere();
-                setBusy(false); setArmed(false);
+                // Любой срыв внутри обязан вернуть кнопку в рабочее состояние: иначе она
+                // навсегда застревает на «Переношу…», и человек не знает, случилось ли что-то.
+                let bad: string | null = null;
+                try { bad = await moveBackupHere(); }
+                catch (e) { bad = String((e as Error).message ?? e).slice(0, 160); }
+                finally { setBusy(false); setArmed(false); }
                 if (bad) toast.error("Перенести не вышло: " + bad, { duration: 15000, description: "Данные остались на устройстве, ничего не потеряно." });
                 else setDone(true);
               }}>{busy ? "Переношу…" : "да, перенести"}</Button>

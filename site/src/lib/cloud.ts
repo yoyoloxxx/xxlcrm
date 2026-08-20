@@ -7,6 +7,7 @@ import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, R
 import { uid, defaultRules, defaultRoutes } from "./model";
 import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
+import { planTransfer } from "./transfer";
 import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
 
@@ -209,20 +210,19 @@ export async function moveBackupHere(): Promise<string | null> {
     Раньше вход в облако просто подменял состояние, и работа месяцами пропадала с экрана. */
 async function uploadLocal(newWs: string, meId: string, src?: Src): Promise<string | null> {
   const s = src ?? getState();
-  const keepRec = s.records.filter(r => !r.demo);
-  const ids = new Set(keepRec.map(r => r.id));
-  const keepTasks = s.tasks.filter(t => !t.demo && (!t.recordId || ids.has(t.recordId)));
-  const keepChats = s.chats.filter(c => !c.demo);
-  const keepActs = s.activities.filter(a => ids.has(a.recordId));
-  if (!keepRec.length && !keepChats.length && !keepTasks.length) return null;
+  if (!s.records.some(r => !r.demo) && !s.chats.some(c => !c.demo) && !s.tasks.some(t => !t.demo)) return null;
+
+  // Новые id и переписанные ссылки считает planTransfer: id в базе — первичный ключ на всю
+  // таблицу, и перенос по старым id УТАЩИЛ БЫ записи из пространства, куда их клали раньше.
+  const plan = planTransfer(s, uid);
 
   wsId = newWs;                                  // мапперы кладут workspace_id из этой переменной
   // Локальные id сотрудников («u1», «u2») в облаке ничего не значат: всё становится вашим,
   // а команду вы позовёте потом и раздадите ответственных заново.
-  const rec = keepRec.map(r => ({ ...M.records.toRow(r), owner_id: meId }));
-  const tsk = keepTasks.map(t => ({ ...M.tasks.toRow(t), owner_id: meId }));
-  const act = keepActs.map(a => ({ ...M.activities.toRow(a), user_id: meId }));
-  const cht = keepChats.map(c => M.chats.toRow({ ...c, recordId: c.recordId && ids.has(c.recordId) ? c.recordId : undefined }));
+  const rec = plan.records.map(r => ({ ...M.records.toRow(r), owner_id: meId }));
+  const tsk = plan.tasks.map(t => ({ ...M.tasks.toRow(t), owner_id: meId }));
+  const act = plan.activities.map(a => ({ ...M.activities.toRow(a), user_id: meId }));
+  const cht = plan.chats.map(c => M.chats.toRow(c));
 
   const push = async (table: string, rows: Row[]): Promise<string | null> => {
     for (let i = 0; i < rows.length; i += 300) {
@@ -378,9 +378,11 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   cloudHooks.save = scheduleSave;
   cloudPendingHook.has = () => saving || dirtyAgain || cloudBroken;
   try { window.localStorage.setItem(LAST_WS, id); } catch { /* приватный режим */ }
-  subscribeRealtime(id);
+  // Подписки — дело полезное, но НЕ обязательное: исключение отсюда раньше вылетало наружу
+  // и подвешивало кнопку, которая ждала openWorkspace. Данные уже загружены — работать можно.
+  try { subscribeRealtime(id); } catch (e) { console.warn("realtime:", e); }
   void inboundBoot(id);      // что сервер принял, пока приложение было закрыто
-  inboundSubscribe(id);
+  try { inboundSubscribe(id); } catch (e) { console.warn("inbound realtime:", e); }
   toast.success(`Облако подключено: ${wss.data?.name}`, { description: "Данные общие для команды и синхронизируются сами" });
 }
 
@@ -482,7 +484,9 @@ async function doSave(): Promise<void> {
 
 // ---------- realtime: чужие изменения приходят сами ----------
 function subscribeRealtime(id: string): void {
-  channel?.unsubscribe();
+  // unsubscribe оставляет канал в клиенте, и supa.channel() с тем же именем вернёт ЕГО же —
+  // а добавить обработчики в уже подписанный канал supabase-js не даёт.
+  if (channel) { try { void supa.removeChannel(channel); } catch { /* уже мёртв */ } channel = null; }
   channel = supa.channel("ws-" + id);
   const tables: (keyof typeof snap)[] = ["records", "tasks", "activities", "chats", "reply_templates"];
   for (const t of tables) {

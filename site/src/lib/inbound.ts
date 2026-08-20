@@ -176,8 +176,14 @@ export async function inboundBoot(ws: string): Promise<void> {
   toast.success(`Разобрано входящих с сервера: ${data.length}`);
 }
 
+// Канал живёт до конца сессии. Открыть пространство ВТОРОЙ раз (перенос базы, переход в другое
+// пространство) supabase-js не даёт: «cannot add postgres_changes callbacks after subscribe()».
+// Раньше это исключение вылетало из openWorkspace и подвешивало вызвавшую кнопку навсегда.
+let inboundCh: ReturnType<typeof supa.channel> | null = null;
+
 export function inboundSubscribe(ws: string) {
-  return supa.channel("inbound-" + ws)
+  if (inboundCh) { try { void supa.removeChannel(inboundCh); } catch { /* канал уже мёртв */ } inboundCh = null; }
+  inboundCh = supa.channel("inbound-" + ws)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "inbound", filter: `workspace_id=eq.${ws}` }, payload => {
       const row = payload.new as Row & { processed: boolean };
       if (row.processed) return; // сервер уже создал диалог и заявку — они приедут своим realtime
@@ -185,4 +191,5 @@ export function inboundSubscribe(ws: string) {
       void supa.from("inbound").update({ processed: true }).eq("id", row.id);
     })
     .subscribe();
+  return inboundCh;
 }
