@@ -1,13 +1,13 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
 import { useEffect, useMemo, useState } from "react";
 import { useApp, setAuthStage, getState } from "@/lib/store";
-import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere, myWorkspaces, switchWs } from "@/lib/cloud";
+import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere, myWorkspaces, switchWs, deleteWs } from "@/lib/cloud";
 import { plural } from "@/lib/model";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Copy, LogIn, LogOut, UserPlus, Users, X } from "lucide-react";
+import { Copy, LogIn, LogOut, Trash2, UserPlus, Users, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function Ava({ name, hue, size = 26 }: { name: string; hue: number; size?: number }) {
@@ -215,9 +215,12 @@ export function TeamLive() {
       )}
       <WsSwitch />
       <MoveBackup />
-      <Button variant="outline" size="sm" className="mt-2.5 h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
-        <LogOut className="size-3.5" /> Выйти из аккаунта
-      </Button>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
+          <LogOut className="size-3.5" /> Выйти из аккаунта
+        </Button>
+        {owner && <DropWs />}
+      </div>
     </div>
   );
 }
@@ -294,6 +297,52 @@ function MoveBackup() {
         ) : (
           <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => setArmed(true)}>Перенести базу сюда</Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Удалить пространство. Завести можно в два клика — убрать было нечем вовсе, и человек,
+// попробовавший и передумавший, оставался с мусором навсегда. Спрашиваем название целиком:
+// это не та кнопка, которую жмут случайно, — вместе с пространством уходит работа всей команды.
+function DropWs() {
+  const s = useApp();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const mine = s.records.filter(r => !r.demo).length;
+
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" className="h-8 gap-1.5 text-destructive hover:bg-destructive/5"
+        onClick={() => { setTyped(""); setOpen(true); }}>
+        <Trash2 className="size-3.5" /> Удалить пространство
+      </Button>
+    );
+  }
+  return (
+    <div className="w-full rounded-md border border-destructive/40 p-3">
+      <div className="text-[12.5px] font-semibold text-destructive">Удалить «{s.wsName}» со всем содержимым</div>
+      <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+        Уйдут {mine} {plural(mine, "запись", "записи", "записей")}, задачи, переписка и вся история —
+        у вас и у {s.users.length > 1 ? "остальных участников" : "будущих участников"}. Отменить это нельзя, копии в облаке не остаётся.
+        {mine > 0 && <> Если данные ещё нужны — сначала <b>Настройки → «Копия базы»</b>.</>}
+      </p>
+      <p className="mt-1.5 text-[11.5px] text-muted-foreground">Для подтверждения введите название: <b className="text-foreground">{s.wsName}</b></p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <Input className="h-8 w-56 text-[12.5px]" value={typed} onChange={e => setTyped(e.target.value)} placeholder="название пространства" />
+        <Button size="sm" className="h-8 text-[11.5px]" disabled={busy || typed.trim() !== s.wsName}
+          onClick={async () => {
+            setBusy(true);
+            const bad = await deleteWs(s.wsId ?? "");
+            setBusy(false);
+            if (bad) { toast.error("Не удалил", { description: bad }); return; }
+            setOpen(false);
+            toast.success("Пространство удалено");
+          }}>
+          {busy ? "Удаляю…" : "Удалить навсегда"}
+        </Button>
+        <Button variant="outline" size="sm" className="h-8 text-[11.5px]" disabled={busy} onClick={() => setOpen(false)}>Отмена</Button>
       </div>
     </div>
   );

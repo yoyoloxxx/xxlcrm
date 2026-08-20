@@ -186,6 +186,30 @@ export async function myWorkspaces(): Promise<{ id: string; name: string; owner:
   })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
 }
 
+/** Удалить пространство. Только своё и только владельцем — остальное отсечёт RLS.
+    Содержимое уезжает следом каскадом, отдельно чистить нечего. */
+export async function deleteWs(id: string): Promise<string | null> {
+  const u = (await supa.auth.getUser()).data.user;
+  if (!u) return "Сессия истекла — войдите заново";
+  const { error } = await supa.from("workspaces").delete().eq("id", id);
+  if (error) return ruAuthErr(error.message);
+
+  // Проверяем, что строки правда нет: RLS отказывает молча — DELETE без подходящей политики
+  // возвращает успех и ноль удалённых строк. Сказать «удалил», не удалив, нельзя.
+  const { data: still } = await supa.from("workspaces").select("id").eq("id", id).maybeSingle();
+  if (still) return "База не дала удалить: политика доступа. Обновите миграцию supabase-drop-ws.sql";
+
+  if (id === wsId) {
+    // Мы стояли в удалённом пространстве — уводим человека в соседнее или на выбор.
+    wsId = null;
+    const rest = await myWorkspaces();
+    if (rest.length) { await openWorkspace(rest[0].id, u.id); return null; }
+    try { window.localStorage.removeItem(LAST_WS); } catch { /* приватный режим */ }
+    window.location.reload();
+  }
+  return null;
+}
+
 /** Перейти в другое своё пространство, не выходя из аккаунта. */
 export async function switchWs(id: string): Promise<string | null> {
   const u = (await supa.auth.getUser()).data.user;
