@@ -122,5 +122,10 @@ export function seed(): { records: Rec[]; tasks: Task[]; activities: Activity[];
     ], 1),
   ];
 
+  // Помечаем весь демо-набор: «Очистить примеры» должно уносить именно примеры,
+  // а не всё подряд вместе с настоящей базой человека.
+  records.forEach(r => { r.demo = true; });
+  tasks.forEach(t => { t.demo = true; });
+  chats.forEach(c => { c.demo = true; });
   return { records, tasks, activities, chats };
 }

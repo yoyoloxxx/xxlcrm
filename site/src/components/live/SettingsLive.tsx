@@ -1,7 +1,7 @@
 // Живые секции настроек: интеграции каналов и шаблоны ответов
 import { useEffect, useState } from "react";
 import type { IntStatus } from "@/lib/model";
-import { useApp, A } from "@/lib/store";
+import { useApp, A, storageState } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
 import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
@@ -305,6 +305,61 @@ export function IntegrationsLive() {
       <p className="mt-2.5 rounded-md border border-dashed px-3 py-2 text-[11.5px] leading-snug text-muted-foreground">
         Что происходит с входящими — ниже, в блоке «Куда падают заявки»: раздел, стадия и ответственный настраиваются отдельно для каждого канала.
       </p>
+
+      <BackupCard />
+    </div>
+  );
+}
+
+// Копия базы одним файлом. В режиме «только это устройство» вся CRM живёт в браузере:
+// почищенный кэш, обновление системы, случайное «удалить данные сайта» — и её нет.
+function BackupCard() {
+  const s = useApp();
+  const st = storageState();
+  const pct = Math.min(100, Math.round((st.bytes / 4_300_000) * 100));
+  const dump = () => {
+    const blob = new Blob([window.localStorage.getItem("xxlcrm-site-v1") ?? "{}"], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    a.download = `xxlcrm-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}.json`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 1000);
+    toast.success("Копия базы сохранена");
+  };
+  const restore = () => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".json,application/json";
+    inp.onchange = async () => {
+      const file = inp.files?.[0]; if (!file) return;
+      if (!window.confirm("Заменить текущую базу содержимым копии? Текущие данные будут потеряны.")) return;
+      try {
+        const text = await file.text();
+        const d = JSON.parse(text) as { records?: unknown; entities?: unknown };
+        if (!Array.isArray(d.records) || !Array.isArray(d.entities)) throw new Error("это не копия базы XXLcrm");
+        window.localStorage.setItem("xxlcrm-site-v1", text);
+        location.reload();
+      } catch (e) { toast.error("Не смог прочитать копию", { description: String(e).slice(0, 120) }); }
+    };
+    inp.click();
+  };
+  if (s.mode === "cloud") return null;
+  return (
+    <div className="mt-2 rounded-md border p-3">
+      <div className="text-[12.5px] font-semibold">Копия базы</div>
+      <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+        Пока вы работаете «только на этом устройстве», вся база лежит в браузере. Скачайте копию перед чисткой кэша,
+        переустановкой системы или большим импортом — файл потом загружается обратно сюда же.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button className="h-9 gap-1.5" onClick={dump}>Скачать копию</Button>
+        <Button variant="outline" className="h-9" onClick={restore}>Загрузить копию</Button>
+        {st.bytes > 0 && (
+          <span className="font-mono2 text-[11px] text-muted-foreground">
+            занято {Math.round(st.bytes / 1e4) / 100} МБ из ~4,3 МБ{pct >= 70 ? ` · ${pct}%, пора в облако` : ""}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

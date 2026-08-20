@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import type { EntityCfg } from "@/lib/model";
 import { plural } from "@/lib/model";
 import { A, allUsers, useApp, storageFits } from "@/lib/store";
-import { decodeFile, guessDelimiter, parseCSV, HEADER_HINTS } from "@/lib/csv";
+import { decodeFile, guessDelimiter, parseCSVReport, looksLikeData, HEADER_HINTS } from "@/lib/csv";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -45,18 +45,32 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
   const [ownerId, setOwnerId] = useState<string>("");
   const [fileName, setFileName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [notes, setNotes] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const reset = () => { setRows([]); setMapping([]); setFileName(""); };
+  const reset = () => { setRows([]); setMapping([]); setFileName(""); setNotes([]); };
   const load = async (file: File) => {
     try {
       const text = decodeFile(await file.arrayBuffer());
-      const parsed = parseCSV(text, guessDelimiter(text));
+      const { rows: parsed, warnings } = parseCSVReport(text, guessDelimiter(text));
       if (!parsed.length) { toast.error("Файл пустой или не похож на таблицу"); return; }
       setRows(parsed);
       setFileName(file.name);
-      setMapping(parsed[0].map(h => guessField(h, entity)));
-      setHasHeader(true);
+      // Файл без шапки: если первая строка похожа на данные, не съедаем первого клиента заголовком
+      const header = !looksLikeData(parsed[0]);
+      setHasHeader(header);
+      const guessed = parsed[0].map(h => (header ? guessField(h, entity) : SKIP));
+      // одно поле — одна колонка: иначе второй телефон молча затирал первый
+      const seen = new Set<string>();
+      const dedup = guessed.map(g => {
+        if (g === SKIP || !seen.has(g)) { if (g !== SKIP) seen.add(g); return g; }
+        return SKIP;
+      });
+      const notes = [...warnings];
+      if (!header) notes.push("Похоже, в файле нет строки заголовков — первая строка взята как данные");
+      if (dedup.some((g, i) => g !== guessed[i])) notes.push("Несколько колонок метили в одно поле — лишние отключил, выберите вручную");
+      setNotes(notes);
+      setMapping(dedup);
     } catch {
       toast.error("Не смог прочитать файл", { description: "Сохраните из Excel как CSV и попробуйте снова" });
     }
@@ -70,8 +84,14 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
   const run = async () => {
     // Проверяем ДО создания записей: браузер даёт около 5 МБ на весь сайт, и раньше импорт
     // на 10 000 строк «успешно» проходил, а после перезагрузки от него не оставалось ничего.
-    // 420 символов на запись сверх самой строки: id, поля, метки времени и запись в хронологию
-    const guess = body.length * (JSON.stringify(body[0] ?? []).length + 420);
+    // 420 символов на запись сверх самой строки: id, поля, метки времени и запись в хронологию.
+    // Меряем не по первой строке (она бывает короткой, а дальше идут полотна комментариев),
+    // а по выборке из двух десятков строк по всему файлу — и берём среднее с запасом.
+    const step = Math.max(1, Math.floor(body.length / 20));
+    let sum = 0, seen = 0;
+    for (let i = 0; i < body.length; i += step) { sum += JSON.stringify(body[i]).length; seen++; }
+    const avg = seen ? sum / seen : 0;
+    const guess = Math.round(body.length * (avg + 420));
     if (!storageFits(guess)) {
       toast.error("Столько в браузер не поместится", {
         duration: 20000,
@@ -135,6 +155,11 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+              {notes.length > 0 && (
+                <div className="mb-2 rounded-md border px-3 py-2" style={{ background: "hsl(var(--brass) / 0.1)", borderColor: "hsl(var(--brass) / 0.5)" }}>
+                  {notes.map((n, i) => <div key={i} className="text-[11.5px] leading-snug" style={{ color: "var(--brass-ink)" }}>{n}</div>)}
+                </div>
+              )}
               <div className="eyebrow mb-1.5">Что куда кладём</div>
               <div className="flex flex-col gap-1">
                 {header.map((h, i) => (
@@ -143,7 +168,7 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
                       <div className="truncate text-[12.5px] font-medium">{hasHeader ? h || `Колонка ${i + 1}` : `Колонка ${i + 1}`}</div>
                       <div className="truncate text-[11px] text-muted-foreground">{body.slice(0, 2).map(r => r[i]).filter(Boolean).join(" · ") || "—"}</div>
                     </div>
-                    <Select value={mapping[i] ?? SKIP} onValueChange={v => setMapping(m => m.map((x, j) => (j === i ? v : x)))}>
+                    <Select value={mapping[i] ?? SKIP} onValueChange={v => setMapping(m => m.map((x, j) => (j === i ? v : x === v && v !== SKIP ? SKIP : x)))}>
                       <SelectTrigger className="h-8 w-[190px] shrink-0 text-[12px]"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value={SKIP}>— не импортировать</SelectItem>

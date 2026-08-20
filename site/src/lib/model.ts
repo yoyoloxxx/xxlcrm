@@ -14,10 +14,11 @@ export interface Rec {
   values: Record<string, unknown>;
   stageId?: string; stageAt?: number; ownerId: string;
   pos?: number; // ручной порядок внутри колонки (дробная позиция — совместимо с numeric в Postgres)
+  demo?: boolean; // из демо-набора: «Очистить примеры» уносит только их
   createdAt: number; updatedAt: number;
 }
 export type TaskKind = "call" | "meet" | "todo" | "msg";
-export interface Task { id: string; title: string; kind: TaskKind; recordId?: string; ownerId: string; due: number; done: boolean; doneAt?: number }
+export interface Task { id: string; title: string; kind: TaskKind; recordId?: string; ownerId: string; due: number; done: boolean; doneAt?: number; demo?: boolean }
 export type ActKind = "created" | "stage" | "field" | "comment" | "task";
 export interface Activity { id: string; recordId: string; ts: number; kind: ActKind; text: string; userId?: string; editKey?: string }
 export interface User { id: string; name: string; role: string; hue: number }
@@ -25,7 +26,7 @@ export interface User { id: string; name: string; role: string; hue: number }
 export type Channel = "tg" | "wa" | "max" | "ig";
 export interface ChatMsg { id: string; ts: number; out: boolean; text: string }
 export interface Chat {
-  id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[];
+  id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[]; demo?: boolean;
   ext?: ChatExt; // реальные внешние id; демо-чаты без ext
 }
 // tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот

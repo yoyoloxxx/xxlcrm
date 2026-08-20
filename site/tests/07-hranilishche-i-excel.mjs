@@ -123,17 +123,42 @@ ok("F3 колонка «Клиент» не подменяет название 
 ok("F4 сумма ложится в «Сумма»", /Сумма/.test(map) && !/87 000 ₽/.test(map), "");
 await p.keyboard.press("Escape"); await p.waitForTimeout(400);
 
-// ---------- E: срыв рендера показывает спасательный экран ----------
-const p2 = await ctx.newPage();
-await p2.addInitScript(() => {
-  // ломаем то, на чём стоит рендер, — приложение обязано показать экран спасения, а не белизну
-  Object.defineProperty(window, "matchMedia", { get() { throw new Error("сломано намеренно"); } });
+// ---------- E: приложение не оставляет человека наедине с белым экраном ----------
+// E-1: испорченная база — открываемся, говорим об этом и откладываем испорченную копию
+const pBad = await ctx.newPage();
+await pBad.addInitScript(() => { localStorage.setItem("xxlcrm-site-v1", '{"records":"не массив","entities":5}'); });
+await pBad.goto(URL);
+await pBad.waitForTimeout(2600);
+const badText = await pBad.locator("body").innerText();
+ok("E1 испорченная база не роняет приложение", badText.length > 100 && /Мой день|Сделки|С чего начнём/.test(badText), badText.slice(0, 120).replace(/\n/g, " | "));
+ok("E2 про повреждение сказано вслух", /повреждена/i.test(badText), badText.slice(-200).replace(/\n/g, " | "));
+ok("E3 испорченная копия отложена, а не выкинута", await pBad.evaluate(() => !!localStorage.getItem("xxlcrm-site-v1-broken")));
+
+// E-2: приложение вообще не стартовало — сторож в HTML показывает экран спасения
+const pDead = await ctx.newPage();
+await pDead.route("**/index.html", async route => {
+  const r = await route.fetch();
+  const body = (await r.text()).replace(/<script type="module"[\s\S]*?<\/script>/, "");
+  await route.fulfill({ response: r, body });
 });
-await p2.goto(URL);
-await p2.waitForTimeout(2000);
-const t2 = await p2.locator("body").innerText();
-ok("E1 вместо белого экрана — понятный текст", t2.trim().length > 0, JSON.stringify(t2.slice(0, 120)));
-ok("E2 предлагается сохранить копию базы", /Сохранить копию базы/.test(t2) || /XXLcrm/.test(t2), t2.slice(0, 200).replace(/\n/g, " | "));
+await pDead.goto(URL);
+await pDead.waitForTimeout(3200);
+const deadText = await pDead.locator("body").innerText();
+ok("E4 вместо белого экрана — понятный текст", /не смог открыться/.test(deadText), JSON.stringify(deadText.slice(0, 120)));
+ok("E5 можно забрать копию базы", /Сохранить копию базы/.test(deadText));
+ok("E6 можно вернуть копию обратно", /Загрузить копию/.test(deadText));
+
+// ---------- G: копию базы можно забрать заранее, а не только после аварии ----------
+await p.goto(URL); await p.waitForTimeout(1800); await p.keyboard.press("Escape");
+await p.getByRole("button", { name: "Настройки" }).first().click(); await p.waitForTimeout(700);
+const setText = await p.locator("main").innerText();
+ok("G1 в настройках есть копия базы", /Копия базы/.test(setText), setText.slice(0, 160).replace(/\n/g, " | "));
+ok("G2 видно, сколько занято", /занято .* МБ/.test(setText), (setText.match(/занято[^\n]*/) ?? [""])[0]);
+const dl3 = p.waitForEvent("download");
+await p.getByRole("button", { name: "Скачать копию" }).click();
+const f3 = await dl3;
+const backup = await f3.createReadStream().then(st2 => new Promise(res => { let b = ""; st2.on("data", c => (b += c)); st2.on("end", () => res(b)); }));
+ok("G3 копия — это настоящая база", (() => { try { const d = JSON.parse(backup); return Array.isArray(d.records) && Array.isArray(d.entities); } catch { return false; } })(), backup.slice(0, 80));
 
 await browser.close();
 const fails = results.filter(r => r[0] === "FAIL");

@@ -3,7 +3,7 @@
 // то, чего ещё нет, лежит в блоке «Скоро» с честной подписью и компонентом Idle.
 import { useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, setWsMeta, recTitle, recById, allEntities, dispCtx, collapseFieldRuns, storageState } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, setWsMeta, recTitle, recById, allEntities, dispCtx, collapseFieldRuns, storageState, tabState, tabTakeOver } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -178,7 +178,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.18</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.19</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -319,7 +319,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.18 · русские даты, обязательные поля, канбан с клавиатуры, честное хранилище и безопасная выгрузка</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.19 · отмена одного действия, две вкладки не спорят, копия базы, грязные файлы и честная склейка по телефону</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -657,8 +657,24 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
 // Демо-данные: пока в базе примеры, человек должен знать, что это не его бизнес
 // Хранилище браузера отказало — молчать нельзя: всё, что человек делает, живёт до закрытия вкладки
 function StorageAlarm() {
-  useApp();
+  const app = useApp();
+  const tab = tabState();
   const st = storageState();
+  if (tab.follower && app.mode === "local") {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
+        <TriangleAlert className="size-4 shrink-0 text-destructive" />
+        <span className="text-[12px] leading-snug text-destructive">
+          <b className="font-semibold">CRM уже открыта в другой вкладке.</b> Здесь я ничего не сохраняю — иначе две вкладки
+          затрут работу друг друга. Работайте в первой или перехватите здесь.
+        </span>
+        <button onClick={tabTakeOver}
+          className="press ml-auto shrink-0 rounded-md border border-destructive/40 px-2 py-1 text-[11.5px] text-destructive hover:bg-destructive/5">
+          Работать здесь
+        </button>
+      </div>
+    );
+  }
   if (!st.broken) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">

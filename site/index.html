@@ -10,6 +10,64 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Сторож белого экрана. Живёт ОТДЕЛЬНО от приложения: если модуль упадёт при загрузке,
+         код приложения не выполнится вовсе, и спасать будет некому. Данные в браузере есть —
+         человек должен иметь возможность их забрать. -->
+    <script>
+      (function () {
+        var died = null;
+        window.addEventListener("error", function (e) { died = died || (e && e.message) || "ошибка загрузки"; });
+        window.addEventListener("unhandledrejection", function () { died = died || "ошибка загрузки"; });
+        function show() {
+          var root = document.getElementById("root");
+          if (!root || root.childElementCount > 0) return;
+          var K = "xxlcrm-site-v1";
+          root.innerHTML =
+            '<div style="max-width:560px;margin:12vh auto;padding:0 20px;font-family:system-ui,sans-serif;color:#2a2620;line-height:1.5">' +
+            '<h1 style="font-size:20px;margin:0 0 8px">XXLcrm не смог открыться</h1>' +
+            '<p style="font-size:14px;margin:0 0 4px">Данные никуда не делись — они лежат в этом браузере. Сохраните копию, потом попробуйте перезагрузить страницу.</p>' +
+            '<p style="font-size:12px;color:#7a7266;margin:8px 0 16px">' + (died || "приложение не смогло запуститься") + '</p>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button id="xxl-dump" style="height:36px;padding:0 14px;font-size:13px;border-radius:8px;border:none;background:#2a2620;color:#f7f4ec;cursor:pointer">Сохранить копию базы</button>' +
+            '<button id="xxl-load" style="height:36px;padding:0 14px;font-size:13px;border-radius:8px;border:1px solid #d6d0c4;background:transparent;cursor:pointer">Загрузить копию</button>' +
+            '<button id="xxl-reload" style="height:36px;padding:0 14px;font-size:13px;border-radius:8px;border:1px solid #d6d0c4;background:transparent;cursor:pointer">Перезагрузить</button>' +
+            '<button id="xxl-clear" style="height:36px;padding:0 14px;font-size:13px;border-radius:8px;border:1px solid #d6d0c4;background:transparent;cursor:pointer">Очистить хранилище</button>' +
+            '</div></div>';
+          document.getElementById("xxl-dump").onclick = function () {
+            try {
+              var b = new Blob([localStorage.getItem(K) || "{}"], { type: "application/json" });
+              var a = document.createElement("a");
+              a.href = URL.createObjectURL(b); a.download = "xxlcrm-backup.json"; a.click();
+            } catch (e) { alert("Не вышло сохранить копию: " + e); }
+          };
+          document.getElementById("xxl-load").onclick = function () {
+            var i = document.createElement("input");
+            i.type = "file"; i.accept = ".json,application/json";
+            i.onchange = function () {
+              var f = i.files && i.files[0]; if (!f) return;
+              var r = new FileReader();
+              r.onload = function () {
+                try {
+                  var d = JSON.parse(String(r.result));
+                  if (!d || !Array.isArray(d.records) || !Array.isArray(d.entities)) throw new Error("это не копия базы XXLcrm");
+                  localStorage.setItem(K, String(r.result)); location.reload();
+                } catch (e) { alert("Не смог прочитать копию: " + e); }
+              };
+              r.readAsText(f);
+            };
+            i.click();
+          };
+          document.getElementById("xxl-reload").onclick = function () { location.reload(); };
+          document.getElementById("xxl-clear").onclick = function () {
+            if (!confirm("Стереть данные этого браузера? Сначала сохраните копию кнопкой рядом.")) return;
+            try { localStorage.clear(); } catch (e) { void e; }
+            location.reload();
+          };
+        }
+        setTimeout(show, 2200);
+        setTimeout(show, 6000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -25,9 +25,12 @@ export function fillTemplate(text: string, chat: Chat): string {
     const stage = e.stages?.find(s => s.id === rec.stageId);
     if (stage) vars["стадия"] = stage.label;
   }
+  // Фигурные скобки из подставленного значения убираем: клиент по имени «{сумма}» иначе
+  // блокировал бы отправку шаблона самому себе — подстановка выглядела бы как незаполненная.
+  const safe = (v: string) => v.replace(/[{}]/g, "");
   const out = text.replace(/\{([^}]+)\}/g, (m, key: string) => {
     const v = vars[key.trim().toLowerCase()];
-    if (v !== undefined && v !== "") return v;
+    if (v !== undefined && v !== "") return safe(v);
     if (key.trim().toLowerCase() === "имя") return "";   // клиента не знаем — обращение выкидываем целиком
     return m;                                            // остальные незаполненные оставляем видимыми: их видно и не отправить
   });

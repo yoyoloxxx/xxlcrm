@@ -20,6 +20,26 @@ function rescue(err: unknown): ReactNode {
     try { window.localStorage.clear(); } catch { /* ignore */ }
     location.reload();
   }
+  // Совет «загрузите копию обратно» без кнопки «загрузить» — издевательство. Вот кнопка.
+  const restore = () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".json,application/json";
+    inp.onchange = async () => {
+      const file = inp.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const d = JSON.parse(text);
+        if (!Array.isArray(d?.records) || !Array.isArray(d?.entities)) throw new Error("это не копия базы XXLcrm");
+        window.localStorage.setItem("xxlcrm-site-v1", text);
+        location.reload();
+      } catch (e) {
+        window.alert("Не смог прочитать копию: " + String(e));
+      }
+    };
+    inp.click();
+  }
   return (
     <div style={{ maxWidth: 560, margin: "12vh auto", padding: "0 20px", fontFamily: "system-ui, sans-serif", color: "#2a2620", lineHeight: 1.5 }}>
       <h1 style={{ fontSize: 20, margin: "0 0 8px" }}>XXLcrm не смог открыться</h1>
@@ -30,6 +50,7 @@ function rescue(err: unknown): ReactNode {
       <p style={{ fontSize: 12, color: "#7a7266", margin: "8px 0 16px", wordBreak: "break-word" }}>{String(err)}</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={dump} style={btn(true)}>Сохранить копию базы</button>
+        <button onClick={restore} style={btn(false)}>Загрузить копию</button>
         <button onClick={() => location.reload()} style={btn(false)}>Перезагрузить</button>
         <button onClick={clear} style={btn(false)}>Очистить хранилище</button>
       </div>
@@ -49,6 +70,11 @@ class Boundary extends Component<{ children: ReactNode }, { err: unknown }> {
 }
 
 const root = document.getElementById("root")!;
+// Если приложение сорвалось до первого кадра (например, чужой модуль упал при загрузке),
+// показать экран спасения всё равно обязаны: пустая страница — это запертые данные.
+window.setTimeout(() => {
+  if (root.childElementCount === 0) createRoot(root).render(rescue("приложение не смогло запуститься"));
+}, 4000);
 try {
   createRoot(root).render(
     <StrictMode>

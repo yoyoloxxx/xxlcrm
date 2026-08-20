@@ -1,7 +1,8 @@
 // Быстрый старт: пресеты ниш + «Мои шаблоны». Один клик — готовые разделы, воронка, автоматизации и примеры.
 // Онбординг-режим: показывается сам на пустом пространстве, с кнопкой «Позже».
 import { useState } from "react";
-import { A, useApp } from "@/lib/store";
+import { A, useApp, getState } from "@/lib/store";
+import { plural } from "@/lib/model";
 import { PRESETS, loadCustomPresets, type Preset } from "@/lib/presets";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,11 @@ export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplie
   const [name, setName] = useState("");
   const custom = loadCustomPresets();
 
+  const s0 = getState();
+  const counts = {
+    records: s0.records.length, chats: s0.chats.length, tasks: s0.tasks.length,
+    mine: s0.records.filter(r => !r.demo).length + s0.chats.filter(c => !c.demo).length,
+  };
   const apply = (p: Preset) => { A.applyPreset(p.id); onApplied(); close(false); };
   const pick = (p: Preset) => (hasData ? setConfirm(p) : apply(p));
   const doSave = () => { if (!name.trim()) return; A.savePresetFromCurrent(name.trim()); setName(""); setSaving(false); };
@@ -54,8 +60,13 @@ export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplie
             <DialogHeader>
               <DialogTitle className="text-[15px]">Применить «{confirm.label}»?</DialogTitle>
               <DialogDescription className="text-[12.5px] leading-relaxed">
-                Это заменит текущие разделы, воронку и записи{confirm.custom ? "" : " демонстрационными примерами ниши"}.
-                Действие можно отменить сразу через Ctrl+Z.
+                Это заменит разделы и воронку{confirm.custom ? "" : ", а записи — примерами ниши"}. Уйдут и те, о ком раньше
+                предупреждение молчало: <b className="font-medium text-foreground">
+                {counts.records} {plural(counts.records, "запись", "записи", "записей")},
+                {" "}{counts.chats} {plural(counts.chats, "диалог", "диалога", "диалогов")},
+                {" "}{counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}
+                </b>{counts.mine > 0 && <> — из них <b className="font-medium text-foreground">{counts.mine} не из примеров</b></>}.
+                {" "}Вернуть — сразу Ctrl+Z. Свою базу лучше сначала выгрузить в CSV.
               </DialogDescription>
             </DialogHeader>
             <div className="flex gap-2">

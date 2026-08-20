@@ -35,7 +35,23 @@ const persistence = {
       const raw = window.localStorage.getItem(LS_KEY);
       if (!raw) return null;
       const d = JSON.parse(raw);
-      if (!Array.isArray(d?.records)) return null;
+      // Проверяем ФОРМУ, а не только наличие: подпорченный ключ раньше ронял модуль
+      // до первого рендера — экран оставался белым, и починить его из интерфейса было нечем.
+      const arr = (v: unknown) => (Array.isArray(v) ? v : null);
+      if (!arr(d?.records) || !arr(d?.entities)) {
+        try {
+          window.localStorage.setItem(LS_KEY + "-broken", raw.slice(0, 2_000_000));
+          window.localStorage.removeItem(LS_KEY);
+        } catch { /* места нет — просто стартуем заново */ }
+        queueMicrotask(() => toast.error("Сохранённая база оказалась повреждена", {
+          duration: 30000,
+          description: "Начал с чистого листа. Испорченная копия отложена — напишите, если нужно её разобрать.",
+        }));
+        return null;
+      }
+      for (const k of ["tasks", "activities", "chats", "automations", "routes", "replyTemplates"]) {
+        if (d[k] !== undefined && !Array.isArray(d[k])) d[k] = undefined;
+      }
       const ints = { ...defaultIntegrations(), ...(d.integrations ?? {}) } as Integrations;
       // после перезагрузки поднимаем сохранённые подключения обратно в ok
       ints.tg.status = ints.tg.token ? "ok" : "off";
@@ -58,10 +74,20 @@ const persistence = {
     } catch { return null; }
   },
   save(s: DataState) {
-    const blob = JSON.stringify({
-      v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
-      chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
-    });
+    let blob: string;
+    try {
+      // сериализация тоже может сорваться — и это ровно та же тихая потеря, что и переполнение
+      blob = JSON.stringify({
+        v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
+        chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
+      });
+    } catch (e) {
+      if (!storageBroken) {
+        storageBroken = true; emit();
+        queueMicrotask(() => toast.error("Не удалось подготовить базу к сохранению", { duration: 30000, description: String(e).slice(0, 120) }));
+      }
+      return;
+    }
     try {
       window.localStorage.setItem(LS_KEY, blob);
       if (storageBroken) { storageBroken = false; storageBytes = blob.length; emit(); }
@@ -82,6 +108,46 @@ const persistence = {
   },
   reset() { try { window.localStorage.removeItem(LS_KEY); } catch { /* ignore */ } },
 };
+
+// ---------- две вкладки ----------
+// Обе вкладки писали в один ключ целым блобом: та, что сохранила последней, стирала работу
+// другой без единого слова. Договариваемся по хранилищу: первая вкладка — ведущая, вторая
+// честно предупреждает и не пишет, пока человек сам не решит перехватить.
+const TAB_KEY = "xxl-tab-owner";
+const TAB_ID = Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+let tabFollower = false;
+const tabAlive = (v: string | null) => {
+  if (!v) return false;
+  const [, ts] = v.split("|");
+  return Date.now() - Number(ts || 0) < 9000;          // ведущая вкладка отмечается раз в 4 секунды
+};
+export const tabState = () => ({ follower: tabFollower, id: TAB_ID });
+export function tabTakeOver() {
+  try { window.localStorage.setItem(TAB_KEY, `${TAB_ID}|${Date.now()}`); } catch { /* ignore */ }
+  tabFollower = false;
+  emit();
+  location.reload();                                    // перечитываем то, что успела записать соседка
+}
+function tabBeat() {
+  let cur: string | null = null;
+  try { cur = window.localStorage.getItem(TAB_KEY); } catch { return; }
+  const mine = cur?.startsWith(TAB_ID + "|");
+  if (mine || !tabAlive(cur)) {
+    try { window.localStorage.setItem(TAB_KEY, `${TAB_ID}|${Date.now()}`); } catch { /* ignore */ }
+    if (tabFollower) { tabFollower = false; emit(); }
+    return;
+  }
+  if (!tabFollower) { tabFollower = true; emit(); }
+}
+if (typeof window !== "undefined") {
+  // Первую проверку откладываем на такт: emit объявлен ниже по файлу, и вызов на этапе
+  // инициализации модуля ронял всё приложение в белый экран у ВТОРОЙ вкладки.
+  window.setTimeout(tabBeat, 0);
+  window.setInterval(tabBeat, 4000);
+  window.addEventListener("pagehide", () => {
+    try { if (window.localStorage.getItem(TAB_KEY)?.startsWith(TAB_ID + "|")) window.localStorage.removeItem(TAB_KEY); } catch { /* ignore */ }
+  });
+}
 
 // Состояние хранилища браузера: если запись не прошла, приложение обязано сказать это вслух
 let storageBroken = false;
@@ -147,12 +213,24 @@ const st: State = {
 let version = 0;
 const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
-const saveInts = () => { try { window.localStorage.setItem(INT_KEY, JSON.stringify(st.integrations)); } catch { /* живём в RAM */ } };
+// Ключи каналов и сессия личного Telegram — тоже данные: их молчаливая потеря значит,
+// что после перезагрузки бот «отключился» без объяснений.
+const saveInts = () => {
+  try { window.localStorage.setItem(INT_KEY, JSON.stringify(st.integrations)); }
+  catch {
+    if (!storageBroken) {
+      storageBroken = true; emit();
+      queueMicrotask(() => toast.error("Настройки каналов не сохранились — в браузере нет места", { duration: 20000 }));
+    }
+  }
+};
 // маршрут сохранения: демо — блоб в localStorage; облако — диф в Supabase (cloudHooks.save назначает cloud.ts)
 export const cloudHooks: { save?: () => void } = {};
 // события для движка автоматизаций (устанавливает automations.ts)
 export const ruleHooks: { created?: (recId: string) => void; stage?: (recId: string, stageId: string) => void } = {};
 const dispatchSave = () => {
+  // Ведомая вкладка не сохраняет: иначе она затрёт базу целиком тем, что видит у себя
+  if (tabFollower && st.mode === "local") return;
   saveInts();
   if (st.mode === "local") persistence.save(st);
   else cloudHooks.save?.();
@@ -172,25 +250,98 @@ export function useApp(): State { useSyncExternalStore(subscribe, () => version)
 export const getState = () => st;
 function mut(fn: (s: State) => void) { fn(st); emit(); }
 
-// ---------- undo (снимки перед опасными действиями) ----------
-const history: string[] = [];
-function pushHistory() {
-  // в снапшот идут и маршруты с правилами: иначе откат удаления раздела возвращает записи,
-  // но заявки продолжают литься в чужой раздел, а выключенные правила остаются выключенными
-  history.push(JSON.stringify({
-    entities: st.entities, records: st.records, tasks: st.tasks, activities: st.activities,
-    automations: st.automations, routes: st.routes, chats: st.chats,
-  }));
-  if (history.length > 25) history.shift();
+// ---------- undo (отмена ОДНОГО действия, а не всей работы) ----------
+// Раньше здесь лежали полные снимки состояния, и Ctrl+Z откатывал базу целиком: вместе с
+// удалённой записью исчезала заявка, пришедшая минуту назад, а в общем пространстве — работа
+// коллег. Теперь запоминаем РАЗНИЦУ: что действие добавило, что убрало, что изменило, — и
+// отменяем только это. Всё, что случилось параллельно, остаётся на месте.
+type Coll = "entities" | "records" | "tasks" | "activities" | "automations" | "routes" | "chats";
+const COLLS: Coll[] = ["entities", "records", "tasks", "activities", "automations", "routes", "chats"];
+type Shot = Record<Coll, Map<string, string>>;                     // id → JSON
+type Delta = { added: string[]; removed: [number, string][]; changed: [string, string][] };
+type Step = { label: string; delta: Partial<Record<Coll, Delta>> };
+
+const idOf = (x: unknown) => String((x as { id?: string })?.id ?? "");
+function shot(): Shot {
+  const out = {} as Shot;
+  for (const c of COLLS) {
+    const m = new Map<string, string>();
+    for (const it of (st[c] as unknown[]) ?? []) m.set(idOf(it), JSON.stringify(it));
+    out[c] = m;
+  }
+  return out;
 }
+function deltaOf(before: Shot): Partial<Record<Coll, Delta>> {
+  const out: Partial<Record<Coll, Delta>> = {};
+  for (const c of COLLS) {
+    const b = before[c];
+    const list = (st[c] as unknown[]) ?? [];
+    const now = new Map<string, string>();
+    list.forEach(it => now.set(idOf(it), JSON.stringify(it)));
+    const added: string[] = [];
+    const changed: [string, string][] = [];
+    for (const [id, json] of now) {
+      const was = b.get(id);
+      if (was === undefined) added.push(id);
+      else if (was !== json) changed.push([id, was]);
+    }
+    const removed: [number, string][] = [];
+    let i = 0;
+    for (const [id, json] of b) { if (!now.has(id)) removed.push([i, json]); i++; }
+    if (added.length || changed.length || removed.length) out[c] = { added, removed, changed };
+  }
+  return out;
+}
+
+const history: Step[] = [];
+let openShot: Shot | null = null;
+let openLabel = "";
+/** Открыть шаг отмены. Вложенные вызовы присоединяются к уже открытому. */
+function pushHistory(label = "") {
+  if (openShot) { if (label && !openLabel) openLabel = label; return; }
+  openShot = shot();
+  openLabel = label;
+  // Закрываем в конце такта: правила ставят задачи через queueMicrotask, и они должны
+  // попасть в тот же шаг — иначе отмена создания записи оставит её задачу сиротой.
+  window.setTimeout(closeStep, 0);
+}
+function closeStep() {
+  const before = openShot;
+  openShot = null;
+  if (!before) return;
+  const delta = deltaOf(before);
+  // Действие, которое ничего не изменило, не должно съедать шаг истории
+  if (!Object.keys(delta).length) return;
+  history.push({ label: openLabel, delta });
+  if (history.length > 60) history.shift();
+}
+export const undoDepth = () => history.length + (openShot ? 1 : 0);
+export const undoLabel = () => history[history.length - 1]?.label ?? "";
+
 export function undo(): boolean {
-  const snap = history.pop();
-  if (!snap) { toast("Отменять нечего", { description: "История пуста — с открытия ничего не удаляли и не перестраивали" }); return false; }
+  closeStep();                                   // если жмут Ctrl+Z в том же такте
+  const step = history.pop();
+  if (!step) { toast("Отменять нечего", { description: "С открытия вкладки отменять пока нечего" }); return false; }
   mut(s => {
-    Object.assign(s, JSON.parse(snap));
+    for (const c of COLLS) {
+      const d = step.delta[c];
+      if (!d) continue;
+      const arr = s[c] as unknown[];
+      if (d.added.length) {
+        const kill = new Set(d.added);
+        for (let i = arr.length - 1; i >= 0; i--) if (kill.has(idOf(arr[i]))) arr.splice(i, 1);
+      }
+      for (const [id, json] of d.changed) {
+        const i = arr.findIndex(x => idOf(x) === id);
+        if (i >= 0) arr[i] = JSON.parse(json);
+        else arr.push(JSON.parse(json));          // изменённое успели удалить — возвращаем
+      }
+      for (const [pos, json] of d.removed) arr.splice(Math.min(pos, arr.length), 0, JSON.parse(json));
+    }
     if (s.drawerRecordId && !s.records.some(r => r.id === s.drawerRecordId)) s.drawerRecordId = null;
+    if (s.activeChatId && !s.chats.some(c => c.id === s.activeChatId)) s.activeChatId = null;
   });
-  toast("Действие отменено");
+  toast(step.label ? `Отменено: ${step.label}` : "Действие отменено");
   return true;
 }
 
@@ -203,16 +354,27 @@ export const userName = (id?: string) => st.users.find(u => u.id === id)?.name ?
 export const userById = (id?: string) => st.users.find(u => u.id === id);
 export const allUsers = () => st.users;
 export const openTasksFor = (recordId: string) => st.tasks.filter(t => t.recordId === recordId && !t.done);
-const phoneDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
-// один человек = одна карточка: ищем запись с таким телефоном в любом разделе (контакты — в приоритете)
+// Ключ склейки по телефону. Один порог на весь продукт: раньше импорт склеивал людей по
+// трёхзначному «101», пустой телефон совпадал с пустым, и заявка приклеивалась к случайному
+// чужому клиенту, затирая ему данные. Меньше семи цифр — не телефон, склеивать нельзя.
+export function phoneKey(v: unknown): string | null {
+  const d = String(v ?? "").replace(/\D/g, "");
+  if (d.length < 7) return null;
+  return d.length >= 10 ? d.slice(-10) : d;   // длинные — по последним 10 (без кода страны)
+}
+const phoneDigits = (v: unknown) => phoneKey(v) ?? "\u0000нет";   // заведомо не совпадёт ни с чем
+// Один человек = одна карточка. Ищем в справочниках (разделы без воронки): сделка — не человек,
+// и «узнавать» клиента по телефону, записанному в сделке, нельзя.
 export function findRecordByPhone(phoneRaw?: string, preferEntity = "contacts"): Rec | undefined {
-  const d = phoneDigits(phoneRaw);
-  if (d.length < 7) return undefined;
+  const d = phoneKey(phoneRaw);
+  if (!d) return undefined;
   const match = (r: Rec) => {
     const e = st.entities.find(x => x.id === r.entityId);
-    return !!e?.fields.some(f => f.type === "phone" && phoneDigits(r.values[f.id]) === d);
+    return !!e?.fields.some(f => f.type === "phone" && phoneKey(r.values[f.id]) === d);
   };
-  return st.records.find(r => r.entityId === preferEntity && match(r)) ?? st.records.find(match);
+  const isBook = (r: Rec) => !st.entities.find(x => x.id === r.entityId)?.stages?.length;
+  return st.records.find(r => r.entityId === preferEntity && match(r))
+    ?? st.records.find(r => isBook(r) && match(r));
 }
 // всё связанное с записью: записи, ссылающиеся на неё связью, и её диалоги
 export function relatedOf(recId: string): { records: Rec[]; chats: Chat[] } {
@@ -229,7 +391,7 @@ export function relatedOf(recId: string): { records: Rec[]; chats: Chat[] } {
   };
   const d = phoneOf();
   const ids = new Set([recId, ...records.map(r => r.id)]);
-  const chats = st.chats.filter(c => (c.recordId && ids.has(c.recordId)) || (d.length >= 7 && phoneDigits(c.phone) === d));
+  const chats = st.chats.filter(c => (c.recordId && ids.has(c.recordId)) || (!!phoneKey(d) && phoneKey(c.phone) === phoneKey(d)));
   return { records, chats };
 }
 
@@ -311,6 +473,18 @@ function repairStructure(s: State): string[] {
     }
     if (r.ownerId && r.ownerId !== OWNER_ROUND && !s.users.some(u => u.id === r.ownerId)) r.ownerId = undefined;
   }
+  // Записи, оставшиеся на удалённой стадии, исчезали с канбана — были в базе, но не на глазах.
+  // Возвращаем их на первую рабочую стадию раздела и говорим об этом вслух.
+  let lost = 0;
+  for (const r of s.records) {
+    const e = s.entities.find(x => x.id === r.entityId);
+    if (!e?.stages?.length) continue;
+    if (r.stageId && e.stages.some(x => x.id === r.stageId)) continue;
+    r.stageId = (e.stages.find(x => x.kind === "open") ?? e.stages[0]).id;
+    r.stageAt = now();
+    lost++;
+  }
+  if (lost) notes.push(`${lost} ${plural(lost, "запись вернулась", "записи вернулись", "записей вернулись")} на первую стадию`);
   let off = 0;
   for (const rule of s.automations) if (rule.enabled && ruleIssue(rule)) { rule.enabled = false; off++; }
   if (off) notes.push(`${off} ${plural(off, "правило выключено", "правила выключены", "правил выключено")} — ссылались на удалённое`);
@@ -321,8 +495,20 @@ function repairAndTell(s: State) {
   if (notes.length) queueMicrotask(() => toast("Настройки подстроены под новую структуру", { description: notes.join(" · ") }));
 }
 
+const ACT_MAX = 240;                                  // в хронику — суть, а не мегабайт текста
 function pushAct(recordId: string, kind: Activity["kind"], text: string, userId?: string, editKey?: string) {
-  st.activities.push({ id: uid("a"), recordId, ts: now(), kind, text, userId, editKey });
+  const t = text.length > ACT_MAX ? text.slice(0, ACT_MAX) + "…" : text;
+  st.activities.push({ id: uid("a"), recordId, ts: now(), kind, text: t, userId, editKey });
+}
+
+// Невидимые управляющие символы направления письма: ими можно показать в списке «50 000»,
+// а сохранить «000 05». В карточке клиента им делать нечего — вырезаем на входе.
+const BIDI = /[\u200E\u200F\u202A-\u202E\u2066-\u2069\u061C]/g;
+const VALUE_MAX = 20000;                              // одно поле — не файловое хранилище
+export function cleanText(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const c = v.replace(BIDI, "");
+  return c.length > VALUE_MAX ? c.slice(0, VALUE_MAX) : c;
 }
 
 // ---------- экшены ----------
@@ -353,6 +539,7 @@ export const A = {
   setUser(id: string) { mut(s => { s.currentUserId = id; }); },
 
   setValue(recId: string, f: Field, value: unknown) {
+    value = cleanText(value);
     mut(s => {
       const r = recById(recId)!; const old = r.values[f.id];
       r.values[f.id] = value; r.updatedAt = now();
@@ -365,7 +552,7 @@ export const A = {
         const last = s.activities[s.activities.length - 1];
         if (last && last.kind === "field" && last.recordId === recId && last.editKey === editKey
             && last.userId === s.currentUserId && now() - last.ts < 180000) {
-          last.text = text; last.ts = now();
+          last.text = text.length > ACT_MAX ? text.slice(0, ACT_MAX) + "…" : text; last.ts = now();
         } else {
           pushAct(recId, "field", text, s.currentUserId, editKey);
         }
@@ -386,7 +573,7 @@ export const A = {
   },
   // Точное перемещение: карточка встаёт ПЕРЕД beforeId (null = в конец колонки)
   moveStageAt(recId: string, stageId: string, beforeId: string | null) {
-    pushHistory();
+    pushHistory("перенос по стадиям");
     mut(s => {
       const r = recById(recId)!;
       const stage = entityCfg(r.entityId).stages?.find(x => x.id === stageId); if (!stage) return;
@@ -444,7 +631,7 @@ export const A = {
     opts: { mergeByPhone?: boolean; stageId?: string; ownerId?: string } = {}
   ): { created: number; merged: number } {
     let created = 0, merged = 0;
-    pushHistory();
+    pushHistory("загрузку из файла");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId)!;
       const fieldOf = (id: string) => e.fields.find(f => f.id === id);
@@ -456,7 +643,7 @@ export const A = {
       const byPhone = new Map<string, Rec>();
       if (phoneF) for (const r of s.records) {
         if (r.entityId !== entityId) continue;
-        const d = phoneDigits(r.values[phoneF.id]);
+        const d = phoneKey(r.values[phoneF.id]);
         if (d && !byPhone.has(d)) byPhone.set(d, r);
       }
       const byTitle = new Map<string, Rec>();
@@ -517,14 +704,13 @@ export const A = {
               values[f.id] = nr.id;
               break;
             }
-            default: values[f.id] = raw;
+            default: values[f.id] = cleanText(raw);
           }
         });
         if (!Object.keys(values).length) continue;
         // дедуп: тот же телефон — дополняем существующую запись, а не плодим вторую
-        const dup = opts.mergeByPhone && phoneF && values[phoneF.id]
-          ? byPhone.get(phoneDigits(values[phoneF.id]))
-          : undefined;
+        const rowKey = phoneF ? phoneKey(values[phoneF.id]) : null;
+        const dup = opts.mergeByPhone && rowKey ? byPhone.get(rowKey) : undefined;
         if (dup) {
           for (const [k, v] of Object.entries(values)) if (dup.values[k] === undefined || dup.values[k] === "") dup.values[k] = v;
           dup.updatedAt = now();
@@ -537,6 +723,9 @@ export const A = {
           stageId, stageAt: now(), pos: (num + 1) * 1000,
         };
         s.records.push(r);
+        // указатель пополняем сразу: иначе два одинаковых телефона ВНУТРИ одного файла
+        // не склеивались — «объединять по телефону» работало только со старой базой
+        if (rowKey && !byPhone.has(rowKey)) byPhone.set(rowKey, r);
         s.activities.push({ id: uid("a"), recordId: r.id, ts: now(), kind: "created", text: "Загружено из файла", userId: s.currentUserId });
         created++;
       }
@@ -546,7 +735,7 @@ export const A = {
   },
   // ---------- массовые действия: одна мутация и одна отмена на всю пачку ----------
   bulkStage(ids: string[], stageId: string) {
-    pushHistory();
+    pushHistory("смену стадии у нескольких");
     mut(s => {
       let pos = Math.max(0, ...s.records.filter(r => r.stageId === stageId).map(r => r.pos ?? 0));
       for (const id of ids) {
@@ -563,7 +752,7 @@ export const A = {
     toast(`Стадия изменена: ${ids.length} ${plural(ids.length, "запись", "записи", "записей")}`, { description: "Ctrl+Z вернёт" });
   },
   bulkOwner(ids: string[], userId: string) {
-    pushHistory();
+    pushHistory("смену ответственного");
     mut(s => {
       for (const id of ids) {
         const r = s.records.find(x => x.id === id); if (!r || r.ownerId === userId) continue;
@@ -574,7 +763,7 @@ export const A = {
     toast(`Ответственный назначен: ${userName(userId)}`, { description: "Ctrl+Z вернёт" });
   },
   bulkTask(ids: string[], title: string, kind: Task["kind"], dueOffsetH: number) {
-    pushHistory();
+    pushHistory("постановку задач");
     mut(s => {
       for (const id of ids) {
         const r = s.records.find(x => x.id === id); if (!r) continue;
@@ -585,7 +774,7 @@ export const A = {
     toast(`Задача поставлена по ${ids.length} ${plural(ids.length, "записи", "записям", "записям")}`);
   },
   bulkDelete(ids: string[]) {
-    pushHistory();
+    pushHistory("удаление нескольких записей");
     const set = new Set(ids);
     mut(s => {
       s.records = s.records.filter(r => !set.has(r.id));
@@ -599,7 +788,7 @@ export const A = {
   // слить дубли: всё из второй карточки переезжает в первую, вторая удаляется
   mergeRecords(keepId: string, dropId: string) {
     if (keepId === dropId) return;
-    pushHistory();
+    pushHistory("объединение карточек");
     mut(s => {
       const keep = s.records.find(r => r.id === keepId), drop = s.records.find(r => r.id === dropId);
       if (!keep || !drop) return;
@@ -619,7 +808,7 @@ export const A = {
     toast.success("Карточки объединены", { description: "Ctrl+Z вернёт" });
   },
   deleteRecord(recId: string) {
-    pushHistory();
+    pushHistory("удаление записи");
     mut(s => {
       s.records = s.records.filter(r => r.id !== recId);
       s.tasks = s.tasks.filter(t => t.recordId !== recId);
@@ -666,13 +855,30 @@ export const A = {
       if (t.done && t.recordId) pushAct(t.recordId, "task", `Задача выполнена: ${t.title}`, s.currentUserId);
     });
   },
+  // «Очистить примеры» — это про ПРИМЕРЫ. Раньше кнопка сносила всё: настоящую базу,
+  // диалоги и подключённые каналы, и заново подсовывала демо. Теперь уносит только помеченное.
   resetDemo() {
     if (st.mode !== "local") { toast("В облачном пространстве демо-сброс недоступен"); return; }
-    persistence.reset();
-    const fresh = seed();
-    ensurePos(fresh.records);
-    mut(s => { Object.assign(s, fresh, { replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations(), routes: defaultRoutes() }); s.drawerRecordId = null; s.activeChatId = null; });
-    toast("Демо-данные сброшены к исходным");
+    const demoRecs = st.records.filter(r => r.demo);
+    const demoChats = st.chats.filter(c => c.demo);
+    const demoTasks = st.tasks.filter(t => t.demo);
+    if (!demoRecs.length && !demoChats.length && !demoTasks.length) {
+      toast("Примеров уже нет", { description: "Всё, что здесь есть, — ваше" });
+      return;
+    }
+    pushHistory("очистку примеров");
+    mut(s => {
+      const kill = new Set(demoRecs.map(r => r.id));
+      s.records = s.records.filter(r => !r.demo);
+      s.chats = s.chats.filter(c => !c.demo);
+      s.tasks = s.tasks.filter(t => !t.demo && !(t.recordId && kill.has(t.recordId)));
+      s.activities = s.activities.filter(a => !kill.has(a.recordId));
+      if (s.drawerRecordId && kill.has(s.drawerRecordId)) s.drawerRecordId = null;
+      if (s.activeChatId && !s.chats.some(c => c.id === s.activeChatId)) s.activeChatId = null;
+    });
+    toast(`Примеры убраны: ${demoRecs.length} ${plural(demoRecs.length, "запись", "записи", "записей")}`, {
+      description: "Ваши записи, диалоги и подключения на месте. Ctrl+Z вернёт примеры",
+    });
   },
 
   // ---------- инбокс ----------
@@ -683,6 +889,7 @@ export const A = {
     });
   },
   chatSend(chatId: string, text: string) {
+    text = String(cleanText(text) ?? "");
     mut(s => {
       const c = s.chats.find(x => x.id === chatId)!;
       c.msgs.push({ id: uid("m"), ts: now(), out: true, text });
@@ -834,7 +1041,7 @@ export const A = {
     return id;
   },
   entPatch(id: string, patch: Partial<Pick<EntityCfg, "name" | "namePlural" | "icon">>) {
-    if (patch.name || patch.namePlural) pushHistory();
+    if (patch.name || patch.namePlural) pushHistory("переименование раздела");
     mut(s => { const e = s.entities.find(x => x.id === id); if (e) Object.assign(e, patch); });
   },
   // применить пресет ниши: разделы + воронка + автоматизации + демо-данные одним нажатием.
@@ -843,7 +1050,7 @@ export const A = {
     const p = resolvePreset(presetId);
     if (!p) return false;
     const data = buildPresetData(p);
-    pushHistory();
+    pushHistory("применение шаблона ниши");
     mut(s => {
       s.entities = data.entities;
       s.automations = data.automations;
@@ -886,7 +1093,7 @@ export const A = {
     const used = st.entities.find(e => e.id !== id && e.fields.some(f => f.type === "relation" && f.relationTo === id));
     if (used) { toast.error(`Сначала удалите поле-связь в разделе «${used.namePlural}»`); return false; }
     if (st.entities.length <= 1) { toast.error("Нельзя удалить последний раздел"); return false; }
-    pushHistory();
+    pushHistory("удаление раздела");
     mut(s => {
       const ids = new Set(s.records.filter(r => r.entityId === id).map(r => r.id));
       s.records = s.records.filter(r => r.entityId !== id);
@@ -901,13 +1108,13 @@ export const A = {
     return true;
   },
   fieldAdd(entityId: string, f: Omit<Field, "id">): string {
-    pushHistory();
+    pushHistory("добавление поля");
     const id = uid("f");
     mut(s => { s.entities.find(e => e.id === entityId)?.fields.push({ ...f, id }); });
     return id;
   },
   fieldUpdate(entityId: string, fieldId: string, patch: Partial<Field>) {
-    if (patch.type) pushHistory();          // смена типа может обесценить значения — даём откат
+    if (patch.type) pushHistory("смену типа поля");          // смена типа может обесценить значения — даём откат
     mut(s => { const f = s.entities.find(e => e.id === entityId)?.fields.find(x => x.id === fieldId); if (f) Object.assign(f, patch); });
   },
   // сколько записей потеряют значение, если удалить поле — спрашиваем ДО удаления в интерфейсе
@@ -919,12 +1126,12 @@ export const A = {
     if (!e || e.titleFieldId === fieldId) { toast.error("Поле-заголовок удалить нельзя"); return; }
     const label = e.fields.find(f => f.id === fieldId)?.label ?? "поле";
     const used = A.fieldUsage(entityId, fieldId);
-    pushHistory();
+    pushHistory("удаление поля");
     mut(s => { const en = s.entities.find(x => x.id === entityId)!; en.fields = en.fields.filter(f => f.id !== fieldId); });
     toast(`Поле «${label}» удалено`, { description: used ? `Значения у ${used} ${plural(used, "записи", "записей", "записей")} потеряны — Ctrl+Z вернёт` : "Ctrl+Z вернёт" });
   },
   fieldMove(entityId: string, fieldId: string, dir: -1 | 1) {
-    pushHistory();
+    pushHistory("перестановку полей");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       const i = e.fields.findIndex(f => f.id === fieldId); const j = i + dir;
@@ -933,7 +1140,7 @@ export const A = {
     });
   },
   stageAdd(entityId: string, label: string) {
-    pushHistory();
+    pushHistory("добавление стадии");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       if (!e.stages) e.stages = [];
@@ -954,7 +1161,7 @@ export const A = {
     if (!e?.stages || e.stages.length <= 1) { toast.error("Должна остаться хотя бы одна стадия"); return; }
     const label = e.stages.find(x => x.id === stageId)?.label ?? "стадия";
     let moved = 0;
-    pushHistory();
+    pushHistory("удаление стадии");
     mut(s => {
       const en = s.entities.find(x => x.id === entityId)!;
       en.stages = en.stages!.filter(x => x.id !== stageId);
@@ -973,7 +1180,7 @@ export const A = {
   },
   // Перетаскивание: стадия/поле встаёт НА место с индексом to (один шаг истории, а не пять)
   stageMoveTo(entityId: string, stageId: string, to: number) {
-    pushHistory();
+    pushHistory("перестановку стадий");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e?.stages) return;
       const from = e.stages.findIndex(x => x.id === stageId);
@@ -983,7 +1190,7 @@ export const A = {
     });
   },
   fieldMoveTo(entityId: string, fieldId: string, to: number) {
-    pushHistory();
+    pushHistory("перестановку полей");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       const from = e.fields.findIndex(f => f.id === fieldId);
@@ -993,7 +1200,7 @@ export const A = {
     });
   },
   stageMove(entityId: string, stageId: string, dir: -1 | 1) {
-    pushHistory();
+    pushHistory("перестановку стадий");
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e?.stages) return;
       const i = e.stages.findIndex(x => x.id === stageId); const j = i + dir;
@@ -1002,6 +1209,8 @@ export const A = {
     });
   },
   tildaLead(fields: Record<string, string>) {
+    // Форму заполняет посторонний человек: чистим невидимые символы и режем полотна
+    fields = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, String(cleanText(v) ?? "")]));
     const low = (k: string) => k.toLowerCase();
     const findVal = (keys: string[]) => Object.entries(fields).find(([k]) => keys.some(kk => low(k).includes(kk)))?.[1];
     const name = findVal(["name", "имя", "фио"]);
@@ -1016,9 +1225,10 @@ export const A = {
     let contactId: string | undefined;
     const contactsCfg = clientEntity();
     if (contactsCfg && route.createClient && (name || phone)) {
-      const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+      // тот же единый ключ, что и везде: «телефон» без семи цифр никого ни с кем не склеивает
+      const key = phoneKey(phone);
       const phoneF = contactsCfg.fields.find(f => f.type === "phone");
-      const existing = phone && phoneF ? st.records.find(r => r.entityId === contactsCfg.id && digits(r.values[phoneF.id]) === digits(phone)) : undefined;
+      const existing = key && phoneF ? st.records.find(r => r.entityId === contactsCfg.id && phoneKey(r.values[phoneF.id]) === key) : undefined;
       if (existing) {
         contactId = existing.id;
         if (bdayTs) mut(s => { const r = s.records.find(x => x.id === contactId)!; r.values["bday"] = bdayTs; r.updatedAt = now(); });
@@ -1111,6 +1321,9 @@ function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
 
 // общий приём входящего из ЛЮБОГО реального канала: найти диалог по внешнему id либо создать (+автолид)
 export function handleIncoming(ext: ChatExt, name: string, channel: Channel, text: string, phone?: string) {
+  // Текст пишет чужой человек: чистим невидимые управляющие символы и обрезаем гигантские полотна
+  text = String(cleanText(text) ?? "");
+  name = String(cleanText(name) ?? "").slice(0, 120);
   const found = st.chats.find(c => c.ext && chatExtMatch(c.ext, ext));
   if (found) {
     A.chatIncoming(found.id, text);
