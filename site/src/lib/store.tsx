@@ -204,6 +204,9 @@ function ensurePos(records: Rec[]) {
 
 export const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 const INT_KEY = "xxlcrm-ints-v1"; // интеграции живут на устройстве отдельно: данные в облаке общие, каналы личные
+const PRIV_KEY = "xxlcrm-priv-v1"; // личная переписка: только на устройстве, в общее пространство не уходит
+/** Диалог из личного Telegram, который человек НЕ отправлял в CRM явной кнопкой. */
+export const isPrivateChat = (c: Chat) => c.ext?.tgu !== undefined && !c.shared;
 function normalizeInts(raw: unknown): Integrations {
   const ints = { ...defaultIntegrations(), ...((raw as Integrations) ?? {}) } as Integrations;
   ints.tg.status = ints.tg.token ? "ok" : "off";
@@ -229,6 +232,14 @@ export function localBackup(): DataState | null { return persistence.load(); }
 const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), routes: defaultRoutes(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
+/** Личная переписка лежит на устройстве и переживает вход в облако — в облаке её нет вовсе. */
+function loadPriv(): Chat[] {
+  try {
+    const raw = window.localStorage.getItem(PRIV_KEY);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? (arr as Chat[]).filter(c => c && typeof c.id === "string" && Array.isArray(c.msgs)) : [];
+  } catch { return []; }
+}
 ensurePos(initial.records);
 const st: State = {
   ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null,
@@ -240,6 +251,10 @@ const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
 // Ключи каналов и сессия личного Telegram — тоже данные: их молчаливая потеря значит,
 // что после перезагрузки бот «отключился» без объяснений.
+const savePriv = () => {
+  try { window.localStorage.setItem(PRIV_KEY, JSON.stringify(st.chats.filter(isPrivateChat))); }
+  catch { /* места нет — о нём уже кричит storageBroken */ }
+};
 const saveInts = () => {
   try { window.localStorage.setItem(INT_KEY, JSON.stringify(st.integrations)); }
   catch {
@@ -257,6 +272,7 @@ const dispatchSave = () => {
   // Ведомая вкладка не сохраняет: иначе она затрёт базу целиком тем, что видит у себя
   if (tabFollower && st.mode === "local") return;
   saveInts();
+  savePriv();
   if (st.mode === "local") persistence.save(st);
   else cloudHooks.save?.();
 };
@@ -1009,7 +1025,7 @@ export const A = {
       const c = s.chats.find(x => x.id === chatId)!;
       c.msgs.push({ id, ts: now(), out: true, text });
       trimChat(c);
-      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)}: ${text}`, s.currentUserId);
+      if (c.recordId && recById(c.recordId) && !isPrivateChat(c)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)}: ${text}`, s.currentUserId);
     });
     return id;
   },
@@ -1019,8 +1035,12 @@ export const A = {
       const c = s.chats.find(x => x.id === chatId); if (!c) return;
       const m = c.msgs.find(x => x.id === msgId); if (!m) return;
       m.failed = true;
-      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `НЕ доставлено (${channelName(c.channel)}): ${m.text}`, s.currentUserId);
+      if (c.recordId && recById(c.recordId) && !isPrivateChat(c)) pushAct(c.recordId, "comment", `НЕ доставлено (${channelName(c.channel)}): ${m.text}`, s.currentUserId);
     });
+  },
+  /** «Это клиент» — личный диалог осознанно уезжает в общее пространство. */
+  chatShare(chatId: string) {
+    mut(s => { const c = s.chats.find(x => x.id === chatId); if (c) c.shared = true; });
   },
   chatIncoming(chatId: string, text: string) {
     mut(s => {
@@ -1028,7 +1048,7 @@ export const A = {
       c.msgs.push({ id: uid("m"), ts: now(), out: false, text });
       trimChat(c);
       if (s.activeChatId !== c.id) c.unread++;
-      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `${channelName(c.channel)}, клиент: ${text}`);
+      if (c.recordId && recById(c.recordId) && !isPrivateChat(c)) pushAct(c.recordId, "comment", `${channelName(c.channel)}, клиент: ${text}`);
     });
     toast("Новое сообщение", { description: text.slice(0, 64) });
   },
@@ -1052,7 +1072,7 @@ export const A = {
       if (!c) { c = { id: uid("c"), name: niceContactName(name, "tg", phone), phone, channel: "tg", unread: 0, msgs: [], ext }; s.chats.unshift(c); }
       c.msgs.push({ id: uid("m"), ts: ts ?? now(), out: true, text });
       trimChat(c);
-      if (c.recordId && recById(c.recordId)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)} (с телефона): ${text}`, s.currentUserId);
+      if (c.recordId && recById(c.recordId) && !isPrivateChat(c)) pushAct(c.recordId, "comment", `→ ${channelName(c.channel)} (с телефона): ${text}`, s.currentUserId);
     });
   },
   // синхронизация диалога личного Telegram при подключении/переподключении: догружаем только новое, без тостов
@@ -1491,6 +1511,10 @@ export function enterCloud(
   ctx: { wsId: string; wsName: string; inviteCode: string; users: User[]; meId: string }
 ) {
   Object.assign(st, data);
+  // Личные диалоги в облаке не хранятся — берём их с устройства, иначе при входе в
+  // пространство человек решил бы, что переписка пропала.
+  const priv = loadPriv();
+  if (priv.length) { const have = new Set(st.chats.map(c => c.id)); st.chats = [...priv.filter(c => !have.has(c.id)), ...st.chats]; }
   ensureBdayField(st.entities);
   ensurePos(st.records);
   st.users = ctx.users; st.currentUserId = ctx.meId;

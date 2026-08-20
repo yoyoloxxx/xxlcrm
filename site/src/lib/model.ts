@@ -28,6 +28,9 @@ export interface ChatMsg { id: string; ts: number; out: boolean; text: string; f
 export interface Chat {
   id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[]; demo?: boolean;
   ext?: ChatExt; // реальные внешние id; демо-чаты без ext
+  // Переписка из ЛИЧНОГО Telegram по умолчанию не уезжает в общее пространство: это личное,
+  // а пространство видит вся команда. В CRM диалог попадает только по явной кнопке.
+  shared?: boolean;
 }
 // tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот
 export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string }

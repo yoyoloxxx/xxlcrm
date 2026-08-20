@@ -1,6 +1,6 @@
 // Живые секции настроек: интеграции каналов и шаблоны ответов
 import { useEffect, useState } from "react";
-import type { IntStatus } from "@/lib/model";
+import { plural, type IntStatus } from "@/lib/model";
 import { useApp, A, storageState } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
 import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { cloudPrivateWeight, purgePrivateFromCloud } from "@/lib/cloud";
+
 import { Bell, Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +58,11 @@ function TgUserCard() {
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
             Ваш обычный Telegram — вход как в приложении: диалоги рабочего номера появятся во «Входящих», ответы уходят от вашего имени.
             {!hasAppKeys && <> Один раз возьмите <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools.</>}
+          </p>
+          <p className="mt-1.5 rounded-md border border-dashed px-2.5 py-2 text-[11px] leading-snug" style={{ color: "var(--brass-ink)" }}>
+            Сюда приедет <b>вся</b> личная переписка номера, включая ту, что к работе отношения не имеет.
+            Она остаётся <b>на этом устройстве</b> и в общее пространство не уходит{s.mode === "cloud" ? "" : ""} — команда её не увидит.
+            В CRM диалог попадает только кнопкой «Это клиент» в самом диалоге.
           </p>
           {t.error && <p className="mt-1 text-[11.5px] text-destructive">{t.error}</p>}
           {hasAppKeys ? (
@@ -121,6 +128,45 @@ function TgUserCard() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Личная переписка, уехавшая в облако до того, как появился запрет. Убрать её должен
+// человек — своей рукой и с ясным пониманием, что именно исчезает.
+function PrivateInCloud() {
+  const s = useApp();
+  const [w, setW] = useState<{ chats: number; acts: number } | null>(null);
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (s.mode === "cloud") void cloudPrivateWeight().then(setW); }, [s.mode, s.wsId]);
+  if (s.mode !== "cloud" || !w || (!w.chats && !w.acts)) return null;
+  return (
+    <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--destructive) / 0.4)" }}>
+      <div className="text-[12.5px] font-semibold text-destructive">В облаке лежит личная переписка</div>
+      <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+        {w.chats} {plural(w.chats, "диалог", "диалога", "диалогов")}
+        {w.acts ? ` и ${w.acts} ${plural(w.acts, "событие", "события", "событий")} с цитатами сообщений` : ""} —
+        это видит каждый, кого вы позовёте в пространство. Копия останется на вашем устройстве, из облака уберу совсем.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        {!armed ? (
+          <Button variant="outline" size="sm" className="h-8 text-destructive" onClick={() => setArmed(true)}>Убрать из облака</Button>
+        ) : (
+          <>
+            <span className="text-[11.5px] text-destructive">Удалить из общей базы?</span>
+            <Button size="sm" className="h-7 text-[11.5px]" disabled={busy} onClick={async () => {
+              setBusy(true);
+              const r = await purgePrivateFromCloud();
+              setBusy(false); setArmed(false);
+              if (typeof r === "string") { toast.error("Не убрал: " + r); return; }
+              toast.success(`Убрано из облака: ${r.chats} ${plural(r.chats, "диалог", "диалога", "диалогов")}`, { description: r.acts ? `и ${r.acts} событий с цитатами` : undefined });
+              void cloudPrivateWeight().then(setW);
+            }}>{busy ? "Убираю…" : "да, убрать"}</Button>
+            <Button variant="outline" size="sm" className="h-7 text-[11.5px]" disabled={busy} onClick={() => setArmed(false)}>отмена</Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -215,6 +261,7 @@ export function IntegrationsLive() {
       </p>
 
       <TgUserCard />
+      <PrivateInCloud />
 
       <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">

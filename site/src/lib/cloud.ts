@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup, isPrivateChat } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { planTransfer } from "./transfer";
 import { inboundBoot, inboundSubscribe } from "./inbound";
@@ -114,6 +114,60 @@ export async function signOutCloud(): Promise<void> {
   try { await supa.auth.signOut(); } catch { /* сессии нет */ }
   allowUnload();             // уход намеренный: сторож «не закрывайте вкладку» здесь только запирал человека в мёртвом интерфейсе
   window.location.reload();  // чистый возврат в демо-режим
+}
+
+/** Сколько личного лежит в ОБЛАКЕ прямо сейчас. Считаем по базе, а не по экрану:
+    строки могли попасть туда с другого устройства. */
+export async function cloudPrivateWeight(): Promise<{ chats: number; acts: number } | null> {
+  if (!wsId) return null;
+  const chats = await supa.from("chats").select("id, msgs").eq("workspace_id", wsId).not("ext->>tgu", "is", null);
+  if (chats.error) return null;
+  const texts = privTexts(chats.data ?? []);
+  const acts = await supa.from("activities").select("id, text").eq("workspace_id", wsId);
+  const hit = acts.error ? [] : (acts.data ?? []).filter((a: Row) => quotesPrivate(String(a.text ?? ""), texts));
+  return { chats: (chats.data ?? []).length, acts: hit.length };
+}
+
+const privTexts = (rows: Row[]): string[] => {
+  const out: string[] = [];
+  for (const r of rows) for (const m of (r.msgs as { text?: string }[] | null) ?? []) {
+    const t = (m?.text ?? "").trim();
+    if (t) out.push(t);
+  }
+  return out;
+};
+// Событие в карточке — это «Telegram, клиент: <текст сообщения>». Совпадение по хвосту, а не
+// по вхождению: короткое «ок» иначе снесло бы чужие комментарии.
+const quotesPrivate = (actText: string, texts: string[]) => texts.some(t => actText.endsWith(t));
+
+/** Убрать личную переписку из общего пространства. Копия на устройстве остаётся. */
+export async function purgePrivateFromCloud(): Promise<{ chats: number; acts: number } | string> {
+  if (!wsId) return "Облако не подключено";
+  const chats = await supa.from("chats").select("id, msgs").eq("workspace_id", wsId).not("ext->>tgu", "is", null);
+  if (chats.error) return chats.error.message;
+  const rows = chats.data ?? [];
+  const texts = privTexts(rows);
+
+  const acts = await supa.from("activities").select("id, text").eq("workspace_id", wsId);
+  if (acts.error) return acts.error.message;
+  const actIds = (acts.data ?? []).filter((a: Row) => quotesPrivate(String(a.text ?? ""), texts)).map((a: Row) => String(a.id));
+
+  for (let i = 0; i < actIds.length; i += 300) {
+    const { error } = await supa.from("activities").delete().in("id", actIds.slice(i, i + 300));
+    if (error) return error.message;
+  }
+  const chatIds = rows.map((r: Row) => String(r.id));
+  for (let i = 0; i < chatIds.length; i += 300) {
+    const { error } = await supa.from("chats").delete().in("id", chatIds.slice(i, i + 300));
+    if (error) return error.message;
+  }
+  // Снимки: иначе следующее сохранение зальёт всё обратно.
+  for (const id of chatIds) snap.chats.delete(id);
+  for (const id of actIds) snap.activities.delete(id);
+  // И из карточек на экране: цитата личного сообщения в ленте клиента — то же самое разглашение.
+  const gone = new Set(actIds);
+  applyRemote(s => { s.activities = s.activities.filter(a => !gone.has(a.id)); });
+  return { chats: chatIds.length, acts: actIds.length };
 }
 
 const LAST_WS = "xxl-ws-last";   // куда возвращаться, если пространств несколько
@@ -437,7 +491,8 @@ async function doSave(): Promise<void> {
       { table: "records", items: st.records, toRow: M.records.toRow as (x: never) => Row },
       { table: "tasks", items: st.tasks, toRow: M.tasks.toRow as (x: never) => Row },
       { table: "activities", items: st.activities, toRow: M.activities.toRow as (x: never) => Row },
-      { table: "chats", items: st.chats, toRow: M.chats.toRow as (x: never) => Row },
+      // Личная переписка в общее пространство не уходит вообще: команда её видеть не должна.
+      { table: "chats", items: st.chats.filter(c => !isPrivateChat(c)), toRow: M.chats.toRow as (x: never) => Row },
       { table: "reply_templates", items: st.replyTemplates, toRow: M.reply_templates.toRow as (x: never) => Row },
     ];
     // Одна непроходящая таблица не должна останавливать сохранение остальных: раньше
@@ -451,7 +506,10 @@ async function doSave(): Promise<void> {
         const j = canon(item);
         if (snap[c.table].get(item.id) !== j) changed.push({ id: item.id, j, row: c.toRow(item as never) });
       }
-      const deletes = [...snap[c.table].keys()].filter(id => !seen.has(id));
+      // Строку, которую мы намеренно перестали выгружать (личный диалог), нельзя молча
+      // сносить в облаке: удаление — отдельное осознанное действие человека, не побочный эффект.
+      const held = c.table === "chats" ? new Set(getState().chats.filter(isPrivateChat).map(x => x.id)) : null;
+      const deletes = [...snap[c.table].keys()].filter(id => !seen.has(id) && !held?.has(id));
       // Пачками: импорт на 10 000 строк уходил одним запросом, упирался в размер и вставал
       // намертво. По 300 строк — и то, что прошло, отмечаем сразу, чтобы не переделывать.
       for (let i = 0; i < changed.length; i += 300) {

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Chat } from "@/lib/model";
 import { relTime, channelName } from "@/lib/model";
-import { useApp, A, recById, recTitle, entityCfg, resolveRoute } from "@/lib/store";
+import { useApp, A, recById, recTitle, entityCfg, resolveRoute, isPrivateChat } from "@/lib/store";
 import { RouteHint } from "./RoutingLive";
 import { sendChatMessage } from "@/lib/integrations";
 import { fillTemplate, unfilledVars } from "@/lib/fill";
@@ -119,9 +119,21 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
               <div className="truncate text-[13.5px] font-semibold">{chat.name}</div>
               <div className="font-mono2 text-[10.5px] text-muted-foreground">
                 {channelName(chat.channel)}{chat.phone ? ` · ${chat.phone}` : ""}{chat.ext?.tgu ? " · личный аккаунт" : chat.ext?.tg !== undefined ? " · бот" : chat.ext ? " · настоящий" : " · демо"}
+                {isPrivateChat(chat) && s.mode === "cloud" && " · только у вас"}
               </div>
             </div>
             <div className="ml-auto flex items-center gap-1.5">
+              {isPrivateChat(chat) && (
+                <Button variant="outline" size="sm" className="h-7 gap-1.5 text-[11.5px]"
+                  title="Отправить диалог в общее пространство — его увидит вся команда"
+                  onClick={() => {
+                    if (!window.confirm(`Диалог «${chat.name}» станет виден всей команде. Это клиент?`)) return;
+                    A.chatShare(chat.id);
+                    toast.success("Диалог в CRM", { description: "Теперь он в общем пространстве" });
+                  }}>
+                  Это клиент
+                </Button>
+              )}
               {linked && (() => {
                 const le = entityCfg(linked.entityId);
                 const stg = le.stages?.find(x => x.id === linked.stageId);
