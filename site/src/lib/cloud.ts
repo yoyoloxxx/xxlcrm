@@ -238,7 +238,12 @@ async function doSave(): Promise<void> {
       }
     }
   } catch (err) {
-    toast.error("Синхронизация не прошла: " + String((err as Error).message).slice(0, 90), { description: "Изменения сохранены локально, повторю при следующем действии" });
+    // Раньше здесь стояло «Изменения сохранены локально» — неправда: в облачном режиме
+    // локальной копии нет, и человек, закрыв вкладку, терял работу, считая её сохранённой.
+    toast.error("Изменения НЕ сохранены: " + String((err as Error).message).slice(0, 80), {
+      duration: 20000,
+      description: "Не закрывайте вкладку. Повторю при следующем действии — или проверьте интернет и нажмите что-нибудь ещё раз.",
+    });
   } finally {
     saving = false;
     if (dirtyAgain) { dirtyAgain = false; void doSave(); }

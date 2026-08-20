@@ -69,35 +69,54 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
     openTasks,
     todayTasks: openTasks.filter(t => t.due < start + DAY).sort((a, b) => a.due - b.due),
     doneToday: s.tasks.filter(t => t.done && (t.doneAt ?? 0) >= start).length,
+    // считаем ВСЕ — иначе счётчик врал бы «5», когда их сорок; в списке ниже показываем первые пять
     noNext: s.records.filter(r => {
       if (withOpenTask.has(r.id)) return false;
       const e = s.entities.find(x => x.id === r.entityId);
       const stg = e?.stages?.find(x => x.id === r.stageId);
       return !!stg && stg.kind === "open";
-    }).slice(0, 5),
+    }),
     unread: s.chats.reduce((n, c) => n + c.unread, 0),
   };
 
   const hour = new Date().getHours();
   const hello = hour < 5 ? "Доброй ночи" : hour < 12 ? "Доброе утро" : hour < 18 ? "Добрый день" : "Добрый вечер";
-  const me = s.mode === "cloud" ? (userName(s.currentUserId).split(/\s+/)[0] || "коллега") : "Глеб";
+  const me = s.mode === "cloud" ? (userName(s.currentUserId).split(/\s+/)[0] || "коллега") : "";
   const dateStr = new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
   const bdays = upcomingBirthdays(7);
 
   return (
     <div className="cascade mx-auto max-w-3xl px-5 py-6">
       <div>
-        <h1 className="text-[21px] font-semibold tracking-tight">{hello}, {me}</h1>
+        <h1 className="text-[21px] font-semibold tracking-tight">{hello}{me ? `, ${me}` : ""}</h1>
         <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-          {dateStr} — {data.todayTasks.length ? `задач на сегодня: ${data.todayTasks.length}` : "на сегодня задач нет"}{data.noNext.length ? `, без следующего шага: ${data.noNext.length}` : ""}
+          {dateStr} — {data.todayTasks.length ? `сегодня и просрочено: ${data.todayTasks.length}` : "на сегодня задач нет"}{data.noNext.length ? `, без следующего шага: ${data.noNext.length}` : ""}
         </p>
       </div>
+
+      {s.mode !== "cloud" && !setupMarks().structure && !setupMarks().imported && s.records.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2">
+          <span className="text-[12px] leading-snug text-muted-foreground">
+            Сейчас на экране <b className="font-medium text-foreground">примеры</b> — чужие сделки и клиенты, чтобы было видно, как работает.
+          </span>
+          <button onClick={onPresets}
+            className="press ml-auto shrink-0 rounded-md px-2 py-1 text-[12px] font-medium"
+            style={{ background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" }}>
+            Настроить под свой бизнес
+          </button>
+          <button onClick={goSettings}
+            className="press shrink-0 rounded-md border px-2 py-1 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
+            Очистить примеры
+          </button>
+        </div>
+      )}
 
       <SetupChecklist goSettings={goSettings} onPresets={onPresets} goEntity={goEntity} />
 
       <div className="mt-4 flex flex-wrap gap-2">
         {([
-          ["Открытых задач", data.openTasks.length, goTasks],
+          ["Сегодня и просрочено", data.todayTasks.length, goTasks],
+          ["Открытых задач всего", data.openTasks.length, goTasks],
           ["Выполнено сегодня", data.doneToday, goTasks],
           ["Без следующего шага", data.noNext.length, null],
           ["Непрочитанных диалогов", data.unread, goInbox],
@@ -172,7 +191,7 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
             <span className="text-[11px] text-muted-foreground">— принцип: у каждой активной записи должна быть задача</span>
           </div>
           <div className="mt-2 divide-y rounded-lg border border-dashed bg-card/60">
-            {data.noNext.map(r => {
+            {data.noNext.slice(0, 5).map(r => {
               const e = entityCfg(r.entityId);
               const stg = e.stages?.find(x => x.id === r.stageId);
               return (
@@ -186,6 +205,11 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
                 </div>
               );
             })}
+            {data.noNext.length > 5 && (
+              <button onClick={goEntity} className="press w-full px-3.5 py-2 text-left text-[11.5px] text-muted-foreground hover:text-foreground">
+                и ещё {data.noNext.length - 5} — открыть раздел
+              </button>
+            )}
           </div>
         </div>
       )}

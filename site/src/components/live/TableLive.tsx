@@ -14,6 +14,7 @@ import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowDown, ArrowUp, Download, ListChecks, Maximize2, Plus, Trash2, X } from "lucide-react";
 import { toCSV, downloadCSV } from "@/lib/export";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (r: import("@/lib/model").Rec) => boolean }) {
@@ -106,7 +107,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
           <th className="border-b bg-background px-2">
             <Popover>
               <PopoverTrigger asChild>
-                <button title="Добавить поле в раздел" className="press grid size-6 place-items-center rounded border border-dashed text-muted-foreground hover:border-foreground/30 hover:text-foreground">
+                <button title="Добавить поле в раздел" aria-label="Добавить поле в раздел" className="press grid size-6 place-items-center rounded border border-dashed text-muted-foreground hover:border-foreground/30 hover:text-foreground">
                   <Plus className="size-3.5" />
                 </button>
               </PopoverTrigger>
@@ -173,7 +174,13 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
               <Plus className="size-3.5" />
               <input
                 value={quick} onChange={ev => setQuick(ev.target.value)}
-                onKeyDown={ev => { if (ev.key === "Enter" && quick.trim()) { A.createRecord(e.id, { [e.titleFieldId]: quick.trim() }); setQuick(""); } }}
+                onKeyDown={ev => { if (ev.key === "Enter" && quick.trim()) { (() => {
+                    const id = A.createRecord(e.id, { [e.titleFieldId]: quick.trim() });
+                    if (filter && !filter(recordsOf(e.id).find(r => r.id === id)!)) {
+                      toast("Запись создана, но скрыта фильтром", { description: quick.trim() });
+                    }
+                    return id;
+                  })(); setQuick(""); } }}
                 placeholder={`Быстро добавить: ${e.name.toLowerCase()} + Enter`}
                 className="h-8 w-80 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/70"
               />
@@ -215,7 +222,7 @@ export function StagePicker({ rec, small }: { rec: Rec; small?: boolean }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="rounded-md transition-transform hover:scale-[1.02]"><Pill o={stage} small={small ?? true} /></button>
+        <button aria-label={`Стадия: ${stage?.label ?? "не выбрана"}. Сменить`} className="rounded-md transition-transform hover:scale-[1.02]"><Pill o={stage} small={small ?? true} /></button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {e.stages?.map(s => (
@@ -230,7 +237,7 @@ export function OwnerPicker({ rec }: { rec: Rec }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="rounded-md p-0.5 hover:bg-foreground/5"><UserChip id={rec.ownerId} withName /></button>
+        <button aria-label="Сменить ответственного" className="rounded-md p-0.5 hover:bg-foreground/5"><UserChip id={rec.ownerId} withName /></button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {allUsers().map(u => (

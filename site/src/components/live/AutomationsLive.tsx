@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Rule, RuleTrigger, TaskKind } from "@/lib/model";
 import { useApp, A, allEntities, ruleIssue, resolveRoute, userName } from "@/lib/store";
-import { SOURCES, sourceName } from "@/lib/model";
+import { SOURCES, sourceName, plural } from "@/lib/model";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -133,7 +133,10 @@ function RuleDialog({ rule, open, onClose }: { rule: Rule | null; open: boolean;
               </div>
             </div>
           </div>
-          <Button className="h-10" onClick={save} disabled={!title.trim()}>Сохранить правило</Button>
+          <div className="flex items-center gap-2">
+            <Button className="h-10 flex-1" onClick={save} disabled={!title.trim()}>Сохранить правило</Button>
+            <Button variant="outline" className="h-10" onClick={onClose}>Отмена</Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -198,7 +201,7 @@ export function AutomationsLive() {
                     </span>
                   ) : `${triggerText(r.trigger)} → ${actionText(r)}`}
                 </div>
-                <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">сработало {r.fired} {r.fired % 10 === 1 && r.fired % 100 !== 11 ? "раз" : "раз(а)"}</div>
+                <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">сработало {r.fired} {plural(r.fired, "раз", "раза", "раз")}</div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <button className="press rounded p-1 text-muted-foreground/0 transition-colors hover:text-foreground group-hover:text-muted-foreground" title="Редактировать" onClick={() => setEditing(r)}>

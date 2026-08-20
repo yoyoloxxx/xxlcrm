@@ -53,6 +53,8 @@ ok("S4 Ctrl+Z возвращает удалённое поле", (await stt(p)).
 const before = (await stt(p)).records.filter(r => r.entityId === "deals").length;
 await p.getByRole("button", { name: "Сделка", exact: true }).first().click();
 await p.waitForTimeout(700);
+// первый Escape выходит из поля названия, второй закрывает карточку
+await p.keyboard.press("Escape"); await p.waitForTimeout(200);
 await p.keyboard.press("Escape"); await p.waitForTimeout(700);
 ok("S5 пустая карточка не остаётся в воронке", (await stt(p)).records.filter(r => r.entityId === "deals").length === before, `${before} → ${(await stt(p)).records.filter(r => r.entityId === "deals").length}`);
 

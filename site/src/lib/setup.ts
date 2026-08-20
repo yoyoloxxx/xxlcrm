@@ -1,7 +1,7 @@
 // Отметки первичной настройки: что человек уже сделал. Три из четырёх шагов вычисляются
 // из состояния, поэтому храним только «структуру трогали» и «чеклист скрыт».
 const KEY = "xxl-setup-v1";
-type Marks = { structure?: boolean; imported?: boolean; hidden?: boolean };
+type Marks = { structure?: boolean; imported?: boolean; hidden?: boolean; greeted?: boolean };
 
 const read = (): Marks => { try { return JSON.parse(window.localStorage.getItem(KEY) ?? "{}") as Marks; } catch { return {}; } };
 let marks = read();

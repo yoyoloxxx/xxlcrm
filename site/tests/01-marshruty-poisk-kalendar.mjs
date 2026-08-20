@@ -107,7 +107,7 @@ await page.getByRole("button", { name: /Клиенты/ }).first().click();
 await page.waitForTimeout(300);
 await page.getByRole("button", { name: /Сделки/ }).first().click();
 await page.waitForTimeout(400);
-ok("Вкладка «Календарь» запомнилась", await page.locator("main").innerText().then(t => /событий/.test(t)));
+ok("Вкладка «Календарь» запомнилась", await page.locator("main").innerText().then(t => /событ/.test(t)));
 ok("Поиск в разделе запомнился", (await page.getByPlaceholder("Поиск в разделе…").inputValue()) === "лендинг");
 await page.reload();
 await page.waitForTimeout(1500);

@@ -8,6 +8,8 @@ import type { Field, Rec, Task, Activity, Chat, ChatExt, Channel, ReplyTemplate,
 import { uid, now, plural, displayValue, defaultIntegrations, channelName, defaultStages, defaultRules, defaultRoutes, sourceName, OWNER_ROUND, PALETTE } from "./model";
 import { ENTITIES, USERS, seed, DEFAULT_TEMPLATES } from "./data";
 import { markSetup } from "./setup";
+import { parseRuDate as parseRu } from "./rudate";
+import { parseNumCell } from "./csv";
 import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset } from "./presets";
 
 interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
@@ -56,15 +58,48 @@ const persistence = {
     } catch { return null; }
   },
   save(s: DataState) {
+    const blob = JSON.stringify({
+      v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
+      chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
+    });
     try {
-      window.localStorage.setItem(LS_KEY, JSON.stringify({
-        v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
-        chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
-      }));
-    } catch { /* памяти нет — живём в RAM */ }
+      window.localStorage.setItem(LS_KEY, blob);
+      if (storageBroken) { storageBroken = false; storageBytes = blob.length; emit(); }
+      else storageBytes = blob.length;
+    } catch {
+      // Раньше здесь стоял пустой catch — и человек, загрузив 10 000 клиентов, видел зелёный
+      // «Загружено», работал полдня, а после F5 не находил ничего. Молчать тут нельзя.
+      storageBytes = blob.length;
+      if (!storageBroken) {
+        storageBroken = true;
+        emit();
+        queueMicrotask(() => toast.error("Браузер отказался сохранять базу — она слишком большая", {
+          duration: 30000,
+          description: "Всё, что вы делаете сейчас, живёт только до закрытия вкладки. Выгрузите разделы в CSV и переходите в облако.",
+        }));
+      }
+    }
   },
   reset() { try { window.localStorage.removeItem(LS_KEY); } catch { /* ignore */ } },
 };
+
+// Состояние хранилища браузера: если запись не прошла, приложение обязано сказать это вслух
+let storageBroken = false;
+let storageBytes = 0;
+export const storageState = () => ({ broken: storageBroken, bytes: storageBytes });
+/** Влезет ли ещё столько символов. Нужен ДО импорта, чтобы не создавать записи, которые не переживут F5. */
+export function storageFits(extraChars: number): boolean {
+  if (storageBroken) return false;
+  const LIMIT = 4_300_000; // ~5 МБ квоты на origin минус чужие ключи и запас
+  let used = 0;
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i)!;
+      used += k.length + (window.localStorage.getItem(k)?.length ?? 0);
+    }
+  } catch { return true; }
+  return used + extraChars < LIMIT;
+}
 
 // миграция: раздать ручные позиции записям, у которых их ещё нет (сохраняя видимый порядок)
 function ensurePos(records: Rec[]) {
@@ -230,6 +265,15 @@ export function routeSummary(source: InboundSource): string {
   return `${entity.name} · ${stage?.label ?? "без стадии"}`;
 }
 
+// Обязательные поля, которые не заполнены. Не запрещаем сохранять — CRM должна принимать
+// заявку с одним телефоном; но перед «выиграно» и в карточке честно показываем, чего не хватает.
+export const isBlank = (v: unknown) => v === undefined || v === null || v === "" || (typeof v === "number" && isNaN(v)) || (typeof v === "string" && !v.trim());
+export function missingRequired(recId: string): Field[] {
+  const r = recById(recId);
+  if (!r) return [];
+  return entityCfg(r.entityId).fields.filter(f => f.required && isBlank(r.values[f.id]));
+}
+
 export function recTitle(id?: string): string {
   const r = recById(id ?? undefined); if (!r) return "";
   const e = entityCfg(r.entityId);
@@ -364,6 +408,12 @@ export const A = {
         r.stageAt = now();
         pushAct(recId, "stage", `Стадия: ${stage.label}`, s.currentUserId);
         queueMicrotask(() => ruleHooks.stage?.(recId, stageId)); // после коммита мутации
+        if (stage.kind === "won") {
+          const gaps = missingRequired(recId);
+          if (gaps.length) queueMicrotask(() => toast.warning("Сделка закрыта, но не заполнено обязательное", {
+            description: gaps.map(f => f.label).join(", ") + " — откройте карточку и добавьте",
+          }));
+        }
       }
     });
   },
@@ -400,6 +450,23 @@ export const A = {
       const fieldOf = (id: string) => e.fields.find(f => f.id === id);
       const phoneF = e.fields.find(f => f.type === "phone");
       let num = s.records.filter(x => x.entityId === entityId).length;
+      // Указатели «телефон → запись» и «название → запись» строим ОДИН раз.
+      // Раньше на каждую строку файла шёл поиск по всему массиву: 12 000 строк — это
+      // 72 миллиона сравнений и 40 секунд намертво замёрзшего окна.
+      const byPhone = new Map<string, Rec>();
+      if (phoneF) for (const r of s.records) {
+        if (r.entityId !== entityId) continue;
+        const d = phoneDigits(r.values[phoneF.id]);
+        if (d && !byPhone.has(d)) byPhone.set(d, r);
+      }
+      const byTitle = new Map<string, Rec>();
+      const titleKey = (entId: string, v: unknown) => entId + "\u0000" + String(v ?? "").toLowerCase();
+      for (const r of s.records) {
+        const ent = s.entities.find(x => x.id === r.entityId);
+        if (!ent) continue;
+        const k = titleKey(r.entityId, r.values[ent.titleFieldId]);
+        if (!byTitle.has(k)) byTitle.set(k, r);
+      }
       for (const row of rows) {
         const values: Record<string, unknown> = {};
         let stageId = opts.stageId ?? e.stages?.[0]?.id;
@@ -414,8 +481,8 @@ export const A = {
           const f = fieldOf(target); if (!f) return;
           switch (f.type) {
             case "money": case "number": {
-              const n = Number(raw.replace(/[^\d,.-]/g, "").replace(/\s/g, "").replace(",", "."));
-              if (!isNaN(n)) values[f.id] = n;
+              const n = parseNumCell(raw);
+              if (n !== null) values[f.id] = n;
               break;
             }
             case "date": case "datetime": {
@@ -437,7 +504,7 @@ export const A = {
             case "relation": {
               const target2 = s.entities.find(x => x.id === f.relationTo);
               if (!target2) break;
-              const found = s.records.find(r => r.entityId === target2.id && String(r.values[target2.titleFieldId] ?? "").toLowerCase() === raw.toLowerCase());
+              const found = byTitle.get(titleKey(target2.id, raw));
               if (found) { values[f.id] = found.id; break; }
               // связанного клиента нет — заводим на лету, чтобы связь не потерялась
               const nr: Rec = {
@@ -446,6 +513,7 @@ export const A = {
                 createdAt: now(), updatedAt: now(), stageId: target2.stages?.[0]?.id, stageAt: now(), pos: 1000,
               };
               s.records.push(nr);
+              byTitle.set(titleKey(target2.id, raw), nr);
               values[f.id] = nr.id;
               break;
             }
@@ -455,7 +523,7 @@ export const A = {
         if (!Object.keys(values).length) continue;
         // дедуп: тот же телефон — дополняем существующую запись, а не плодим вторую
         const dup = opts.mergeByPhone && phoneF && values[phoneF.id]
-          ? s.records.find(r => r.entityId === entityId && phoneDigits(r.values[phoneF.id]) === phoneDigits(values[phoneF.id]))
+          ? byPhone.get(phoneDigits(values[phoneF.id]))
           : undefined;
         if (dup) {
           for (const [k, v] of Object.entries(values)) if (dup.values[k] === undefined || dup.values[k] === "") dup.values[k] = v;
@@ -869,7 +937,10 @@ export const A = {
     mut(s => {
       const e = s.entities.find(x => x.id === entityId); if (!e) return;
       if (!e.stages) e.stages = [];
-      e.stages.push({ id: uid("s"), label: label.trim() || "Стадия", color: PALETTE[e.stages.length % PALETTE.length], kind: "open" });
+      const stage: Stage = { id: uid("s"), label: label.trim() || "Стадия", color: PALETTE[e.stages.length % PALETTE.length], kind: "open" };
+      // рабочая стадия должна встать перед финальными: иначе она оказывается за «Успех» и «Отказ»
+      const firstFinal = e.stages.findIndex(x => x.kind !== "open");
+      if (firstFinal === -1) e.stages.push(stage); else e.stages.splice(firstFinal, 0, stage);
     });
   },
   stageUpdate(entityId: string, stageId: string, patch: Partial<Stage>) {
@@ -898,6 +969,27 @@ export const A = {
     });
     toast(`Стадия «${label}» удалена`, {
       description: moved ? `${moved} ${plural(moved, "запись перенесена", "записи перенесены", "записей перенесено")} в первую стадию — Ctrl+Z вернёт` : "Ctrl+Z вернёт",
+    });
+  },
+  // Перетаскивание: стадия/поле встаёт НА место с индексом to (один шаг истории, а не пять)
+  stageMoveTo(entityId: string, stageId: string, to: number) {
+    pushHistory();
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId); if (!e?.stages) return;
+      const from = e.stages.findIndex(x => x.id === stageId);
+      if (from < 0 || to < 0 || to >= e.stages.length || from === to) return;
+      const [x] = e.stages.splice(from, 1);
+      e.stages.splice(to, 0, x);
+    });
+  },
+  fieldMoveTo(entityId: string, fieldId: string, to: number) {
+    pushHistory();
+    mut(s => {
+      const e = s.entities.find(x => x.id === entityId); if (!e) return;
+      const from = e.fields.findIndex(f => f.id === fieldId);
+      if (from < 0 || to < 0 || to >= e.fields.length || from === to) return;
+      const [x] = e.fields.splice(from, 1);
+      e.fields.splice(to, 0, x);
     });
   },
   stageMove(entityId: string, stageId: string, dir: -1 | 1) {
@@ -968,22 +1060,10 @@ export const A = {
   },
 };
 
-// «19.08.1992», «1992-08-19», «19/08/92» → таймстамп (для дат рождения из форм)
+// Разбор дат живёт в rudate.ts — там же, где его использует поле ввода,
+// чтобы форма, импорт и приём заявок понимали дату ОДИНАКОВО.
 export function parseRuDate(raw?: string): number | undefined {
-  if (!raw) return undefined;
-  const t = raw.trim();
-  let m = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
-  if (m) {
-    let y = Number(m[3]); if (y < 100) y += y > 30 ? 1900 : 2000;
-    const d = new Date(y, Number(m[2]) - 1, Number(m[1]), 12);
-    return isNaN(d.getTime()) ? undefined : d.getTime();
-  }
-  m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) {
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
-    return isNaN(d.getTime()) ? undefined : d.getTime();
-  }
-  return undefined;
+  return parseRu(raw ?? "") ?? undefined;
 }
 
 // схлопывание истории: серию правок ОДНОГО поля (та же запись, тот же автор, рядом по времени)

@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { EntityCfg } from "@/lib/model";
 import { plural } from "@/lib/model";
-import { A, allUsers, useApp } from "@/lib/store";
+import { A, allUsers, useApp, storageFits } from "@/lib/store";
 import { decodeFile, guessDelimiter, parseCSV, HEADER_HINTS } from "@/lib/csv";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,11 @@ const STAGE = "__stage";
 // какое поле подставить колонке по её заголовку
 function guessField(header: string, e: EntityCfg): string {
   const h = header.trim();
+  // Точное совпадение заголовка с названием поля — важнее любых догадок: иначе свой же
+  // экспорт «Сделок» возвращался с колонкой «Клиент», подставленной в название сделки.
+  const exactFirst = e.fields.find(f => f.label.toLowerCase() === h.toLowerCase());
+  if (exactFirst) return exactFirst.id;
+  if (e.stages?.length && /^стади/i.test(h)) return STAGE;
   for (const hint of HEADER_HINTS) {
     if (!hint.re.test(h)) continue;
     if (hint.type.includes("__stage") && e.stages?.length) return STAGE;
@@ -39,6 +44,7 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
   const [stageId, setStageId] = useState<string>(entity.stages?.[0]?.id ?? "");
   const [ownerId, setOwnerId] = useState<string>("");
   const [fileName, setFileName] = useState("");
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const reset = () => { setRows([]); setMapping([]); setFileName(""); };
@@ -61,7 +67,23 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
   const phoneCol = mapping.findIndex(m => entity.fields.find(f => f.id === m)?.type === "phone");
   const mapped = mapping.filter(m => m !== SKIP).length;
 
-  const run = () => {
+  const run = async () => {
+    // Проверяем ДО создания записей: браузер даёт около 5 МБ на весь сайт, и раньше импорт
+    // на 10 000 строк «успешно» проходил, а после перезагрузки от него не оставалось ничего.
+    // 420 символов на запись сверх самой строки: id, поля, метки времени и запись в хронологию
+    const guess = body.length * (JSON.stringify(body[0] ?? []).length + 420);
+    if (!storageFits(guess)) {
+      toast.error("Столько в браузер не поместится", {
+        duration: 20000,
+        description: `${body.length} ${plural(body.length, "строка", "строки", "строк")} — это примерно ${Math.round(guess / 1e6 * 10) / 10} МБ, а браузер хранит около 5 МБ на всё. Загрузите файл частями или перейдите в облачное пространство: там объём не ограничен.`,
+      });
+      setBusy(false);
+      return;
+    }
+    // Несколько тысяч строк считаются секунды и держат поток. Сначала даём кадру нарисоваться,
+    // чтобы человек видел «Загружаю…», а не думал, что окно повисло.
+    setBusy(true);
+    await new Promise(r => window.setTimeout(r, 40));
     const res = A.importRecords(entity.id, mapping.map(m => (m === SKIP ? null : m)), body, {
       mergeByPhone: merge && phoneCol >= 0,
       stageId: stageId || undefined,
@@ -70,6 +92,7 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
     toast.success(`Загружено: ${res.created} ${plural(res.created, "запись", "записи", "записей")}`, {
       description: [res.merged ? `объединено с существующими: ${res.merged}` : "", "Ctrl+Z отменит импорт целиком"].filter(Boolean).join(" · "),
     });
+    setBusy(false);
     onOpenChange(false);
     reset();
   };
@@ -170,8 +193,8 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
 
             <div className="flex items-center gap-2 border-t px-5 py-3">
               <span className="text-[11.5px] text-muted-foreground">Проверьте пары слева — импорт можно отменить через Ctrl+Z</span>
-              <Button className="ml-auto h-9" disabled={!body.length || !mapped} onClick={run}>
-                Загрузить {body.length} {plural(body.length, "строку", "строки", "строк")}
+              <Button className="ml-auto h-9" disabled={!body.length || !mapped || busy} onClick={() => void run()}>
+                {busy ? "Загружаю…" : `Загрузить ${body.length} ${plural(body.length, "строку", "строки", "строк")}`}
               </Button>
             </div>
           </>

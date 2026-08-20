@@ -89,6 +89,14 @@
   .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80; }
   .press { transition: transform 0.12s var(--ease-out); }
   .press:active { transform: scale(0.975); }
+  /* Палец — не курсор: на сенсорных экранах мелкие кнопки промахиваются.
+     Не наращиваем невидимую область (перекрыла бы соседей в плотных панелях),
+     а честно увеличиваем сами кнопки и убираем задержку двойного тапа. */
+  @media (pointer: coarse) {
+    button, [role="button"], a, label, summary { touch-action: manipulation; }
+    .press, button { min-height: 34px; }
+    .press:where(.rounded-full, .rounded, .rounded-md, .rounded-\[3px\]) { min-width: 34px; }
+  }
 }
 
 /* Зерно: фиксированный слой, не участвует в скролле и событиях */

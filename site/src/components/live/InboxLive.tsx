@@ -19,14 +19,15 @@ const CH: Record<Chat["channel"], { label: string; c: string }> = {
 export function InboxLive({ goSettings }: { goSettings: () => void }) {
   const s = useApp();
   const [mobileThread, setMobileThread] = useState(false); // телефон: показываем либо список, либо переписку
-  const chat = s.chats.find(c => c.id === s.activeChatId) ?? s.chats[0] ?? null;
+  // раньше первый диалог открывался сам и молча гасил непрочитанное — теперь только по клику
+  const chat = s.chats.find(c => c.id === s.activeChatId) ?? null;
   // Черновик — свой у каждого диалога: при переключении текст не «переезжает» к другому клиенту
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draft = chat ? (drafts[chat.id] ?? "") : "";
   const setDraft = (v: string) => { const id = chat?.id; if (id) setDrafts(d => ({ ...d, [id]: v })); };
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { if (chat && s.activeChatId !== chat.id) A.openChat(chat.id); }, [chat?.id]);
+
   // заготовка из «Поздравить по шаблону» (Задачи / Мой день)
   useEffect(() => {
     const pd = s.pendingDraft;
@@ -104,7 +105,9 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
       </div>
 
       {!chat ? (
-        <div className="grid flex-1 place-items-center text-[13px] text-muted-foreground max-md:hidden">Выберите диалог</div>
+        <div className="grid flex-1 place-items-center px-6 text-center text-[13px] text-muted-foreground max-md:hidden">
+          Выберите диалог слева — непрочитанные не гаснут, пока вы его не открыли
+        </div>
       ) : (
         <div className={cn("flex min-w-0 flex-1 flex-col", !mobileThread && "max-md:hidden")}>
           <div className="flex items-center gap-3 border-b px-4 py-2.5">
@@ -168,7 +171,7 @@ export function InboxLive({ goSettings }: { goSettings: () => void }) {
                     {t.name}
                   </button>
                 ))}
-                <button onClick={goSettings} title="Управление шаблонами — в настройках"
+                <button onClick={goSettings} aria-label="Управление шаблонами в настройках" title="Управление шаблонами — в настройках"
                   className="press h-6 w-6 shrink-0 rounded-full border text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">+</button>
               </div>
               <div className="flex items-center gap-2">

@@ -2,7 +2,7 @@
 // Раньше здесь был нарисованный август — теперь это то же самое, что в канбане и таблице, только по дням.
 import { useMemo, useState } from "react";
 import type { EntityCfg, Rec } from "@/lib/model";
-import { fmtMoney } from "@/lib/model";
+import { fmtMoney, plural } from "@/lib/model";
 import { useApp, A, getState, recTitle, entityCfg } from "@/lib/store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -86,7 +86,7 @@ export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (
     <div className="cascade flex-1 overflow-y-auto p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-[13.5px] font-semibold capitalize">{MONTHS[cur.getMonth()]} {cur.getFullYear()}</span>
-        <span className="font-mono2 text-[10.5px] text-muted-foreground">{total} событий</span>
+        <span className="font-mono2 text-[10.5px] text-muted-foreground">{total} {plural(total, "событие", "события", "событий")}</span>
         <div className="ml-auto flex items-center gap-1.5">
           {dateFields.length > 1 && (
             <Select value={fieldId} onValueChange={setFieldId}>
@@ -99,9 +99,9 @@ export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (
             style={showTasks ? { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" } : undefined}>
             Задачи
           </button>
-          <button onClick={() => setOffset(o => o - 1)} className="press h-7 rounded-md border px-2 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">‹</button>
+          <button onClick={() => setOffset(o => o - 1)} aria-label="Предыдущий месяц" title="Предыдущий месяц" className="press h-7 rounded-md border px-2 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">‹</button>
           <button onClick={() => setOffset(0)} className="press h-7 rounded-md border px-2 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">Сегодня</button>
-          <button onClick={() => setOffset(o => o + 1)} className="press h-7 rounded-md border px-2 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">›</button>
+          <button onClick={() => setOffset(o => o + 1)} aria-label="Следующий месяц" title="Следующий месяц" className="press h-7 rounded-md border px-2 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">›</button>
         </div>
       </div>
 

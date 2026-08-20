@@ -54,3 +54,27 @@ export const HEADER_HINTS: { re: RegExp; type: string[]; ids?: string[] }[] = [
   { re: /(сайт|url|ссылк|инст|instagram|telegram|vk)/i, type: ["url"] },
   { re: /(ответствен|менеджер|owner|manager)/i, type: ["user"] },
 ];
+
+/** Число из ячейки: «12 000,50», «1 234», «1,234.56», «50 000 ₽», «(1 200)» — всё это деньги.
+    Русский и английский форматы различаем по позиции последнего разделителя. */
+export function parseNumCell(raw: string): number | null {
+  let s = String(raw).trim();
+  if (!s) return null;
+  const neg = /^\(.*\)$/.test(s) || /^-/.test(s);
+  s = s.replace(/[()]/g, "").replace(/^[-+]/, "");
+  s = s.replace(/[^\d.,]/g, "");            // убираем ₽, $, пробелы, NBSP, буквы
+  if (!s) return null;
+  const lastDot = s.lastIndexOf("."), lastCom = s.lastIndexOf(",");
+  const sep = Math.max(lastDot, lastCom);
+  let intPart = s, frac = "";
+  if (sep >= 0) {
+    const tail = s.slice(sep + 1);
+    // разделитель дробной части — только если после него 1–2 цифры и он последний
+    if (/^\d{1,2}$/.test(tail) && !/[.,]/.test(tail)) { intPart = s.slice(0, sep); frac = tail; }
+  }
+  intPart = intPart.replace(/[.,]/g, "");
+  if (!intPart && !frac) return null;
+  const n = Number((intPart || "0") + (frac ? "." + frac : ""));
+  if (isNaN(n)) return null;
+  return neg ? -n : n;
+}

@@ -1,7 +1,7 @@
 // Реальные каналы прямо из браузера: Telegram Bot API, WhatsApp (Green API), MAX Bot API, Tilda (webhook-мост).
 // Токены хранятся только в localStorage этого браузера. Все ошибки — мягкие: тост + статус, тик продолжается.
 import { getState, A, handleIncoming } from "./store";
-import { tguInit, tguSend } from "./tg-user";
+import { tguInit, tguSend } from "./tg-user-lazy";
 import { toast } from "sonner";
 
 const ints = () => getState().integrations;

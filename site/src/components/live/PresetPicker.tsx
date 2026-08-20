@@ -23,7 +23,7 @@ function PresetCard({ p, onPick, onDelete }: { p: Preset; onPick: () => void; on
         {!onDelete && <Check className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-70" />}
       </button>
       {onDelete && (
-        <button onClick={onDelete} title="Удалить шаблон"
+        <button onClick={onDelete} title="Удалить шаблон" aria-label="Удалить шаблон"
           className="absolute right-2 top-2 grid size-6 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100">
           <Trash2 className="size-3.5" />
         </button>

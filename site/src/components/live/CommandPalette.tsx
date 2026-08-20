@@ -2,7 +2,7 @@
 // Смысл — не прыгать между вкладками: нашёл клиента → сразу его карточка, диалог или задача.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp, A, allEntities, recTitle, entityCfg, getState, relatedOf } from "@/lib/store";
-import { relTime, displayValue } from "@/lib/model";
+import { relTime, displayValue, plural } from "@/lib/model";
 import { EntIcon } from "./icons";
 import { Inbox, ListChecks, MessageSquare, Search, Settings, Sparkles, SunMedium, Zap, LayoutDashboard, Plus, CornerDownLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -87,7 +87,7 @@ export function CommandPalette({ open, onClose, goPage }: { open: boolean; onClo
     for (const e of allEntities()) {
       if (needle && !norm(e.namePlural).includes(needle) && !norm(e.name).includes(needle)) continue;
       out.push({
-        id: "e_" + e.id, group: "Разделы", title: e.namePlural, sub: `${st.records.filter(r => r.entityId === e.id).length} записей`,
+        id: "e_" + e.id, group: "Разделы", title: e.namePlural, sub: (() => { const n = st.records.filter(r => r.entityId === e.id).length; return `${n} ${plural(n, "запись", "записи", "записей")}`; })(),
         icon: () => <EntIcon name={e.icon} className="size-4" />, run: () => go("ent:" + e.id),
       });
     }

@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
-import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, entityCfg as entCfg } from "@/lib/store";
+import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, missingRequired, isBlank, entityCfg as entCfg } from "@/lib/store";
 import { sendChatMessage } from "@/lib/integrations";
 import { toast } from "sonner";
 import { fillTemplate, unfilledVars } from "@/lib/fill";
@@ -33,6 +33,9 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
       if (ev.key !== "Escape") return;
       const t = ev.target as HTMLElement | null;
       if (t && (t.closest("[role=dialog]") || t.closest("[data-radix-popper-content-wrapper]"))) return;
+      // Первый Escape в поле — выйти из поля, а не выбросить карточку: человек правил дату,
+      // передумал, нажал Escape — и терял всю карточку. Второй Escape закрывает.
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) { t.blur(); return; }
       A.openRecord(null);
     };
     window.addEventListener("keydown", h);
@@ -44,11 +47,12 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
   const tasks = getState().tasks.filter(t => t.recordId === r.id).sort((a, b) => Number(a.done) - Number(b.done) || a.due - b.due);
   const acts = collapseFieldRuns(getState().activities.filter(a => a.recordId === r.id).sort((a, b) => b.ts - a.ts));
   const stageIdx = e.stages?.findIndex(s => s.id === r.stageId) ?? -1;
+  const gaps = missingRequired(r.id);
 
   return (
     <>
       <div className="fixed inset-0 z-40 bg-foreground/10 md:bg-transparent" onClick={() => A.openRecord(null)} />
-      <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[500px] flex-col border-l bg-card shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.25)]"
+      <aside data-drawer aria-label="Карточка записи" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[500px] flex-col border-l bg-card shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.25)]"
         style={{ animation: "rise 0.22s var(--ease-out)" }}>
         <header className="flex items-start gap-2.5 border-b px-4 py-3">
           <div className="min-w-0 flex-1">
@@ -64,13 +68,13 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"><MoreVertical className="size-4" /></button>
+              <button aria-label="Ещё действия" title="Ещё" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"><MoreVertical className="size-4" /></button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem className="gap-2 text-destructive" onClick={() => A.deleteRecord(r.id)}><Trash2 className="size-4" /> Удалить запись</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <button className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" onClick={() => A.openRecord(null)}><X className="size-4" /></button>
+          <button aria-label="Закрыть карточку" title="Закрыть (Esc)" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" onClick={() => A.openRecord(null)}><X className="size-4" /></button>
         </header>
 
         {e.stages && (
@@ -89,6 +93,20 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
           </div>
         )}
 
+        {gaps.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-2 text-[11.5px]"
+            style={{ background: "hsl(var(--brass) / 0.12)" }}>
+            <span className="font-medium" style={{ color: "var(--brass-ink)" }}>Не заполнено:</span>
+            {gaps.map(f => (
+              <button key={f.id} onClick={() => document.getElementById(`fld_${r.id}_${f.id}`)?.querySelector<HTMLElement>("input,textarea,button")?.focus()}
+                className="press rounded border px-1.5 py-0.5 hover:border-foreground/30" style={{ borderColor: "var(--brass-ink)", color: "var(--brass-ink)" }}>
+                {f.label}
+              </button>
+            ))}
+            <span className="text-muted-foreground">— сохранить можно, но перед «выиграно» напомню</span>
+          </div>
+        )}
+
         <LinkToPipeline rec={r} />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -99,8 +117,8 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
                 <OwnerPicker rec={r} />
               </div>
               {e.fields.filter(f => f.id !== e.titleFieldId).map(f => (
-                <div key={f.id} className={cn("flex flex-col gap-1", f.type === "textarea" && "sm:col-span-2")}>
-                  <label className="eyebrow">{f.label}{f.required && <span style={{ color: "var(--brass-ink)" }}> *</span>}</label>
+                <div key={f.id} id={`fld_${r.id}_${f.id}`} className={cn("flex flex-col gap-1", f.type === "textarea" && "sm:col-span-2")}>
+                  <label className="eyebrow">{f.label}{f.required && <span title="обязательное" style={{ color: isBlank(r.values[f.id]) ? "var(--brass-ink)" : undefined }}> *</span>}</label>
                   <FieldInput field={f} value={r.values[f.id]} onChange={v => A.setValue(r.id, f, v)} />
                 </div>
               ))}

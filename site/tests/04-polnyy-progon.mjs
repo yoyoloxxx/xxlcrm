@@ -84,7 +84,12 @@ const tasksBefore = (await st(p)).tasks.length;
 await openEnt("Сделки");
 await p.getByRole("button", { name: /^\+? ?Сделка$/ }).first().click().catch(() => {});
 await p.waitForTimeout(900);
-await p.keyboard.press("Escape");
+// имя обязательно: без него карточка считается пустой и удаляется при закрытии вместе с задачей
+await p.keyboard.type("Сделка из проверки правил");
+await p.waitForTimeout(300);
+// первый Escape выходит из поля, второй закрывает карточку
+await p.keyboard.press("Escape"); await p.waitForTimeout(150); await p.keyboard.press("Escape");
+await p.waitForTimeout(400);
 const tasksAfter = (await st(p)).tasks.length;
 ok("C3 правило «создана запись» ставит задачу", tasksAfter > tasksBefore, `${tasksBefore}→${tasksAfter}`);
 

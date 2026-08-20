@@ -81,9 +81,28 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                         });
                       }}
                       onClick={() => A.openRecord(r.id)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${recTitle(r.id)}, стадия ${st.label}. Enter — открыть, Ctrl со стрелкой — перенести`}
+                      onKeyDown={ev => {
+                        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); A.openRecord(r.id); return; }
+                        // перенос с клавиатуры: мышь есть не у всех, а на канбане без неё раньше было никак
+                        if ((ev.ctrlKey || ev.metaKey || ev.altKey) && (ev.key === "ArrowLeft" || ev.key === "ArrowRight")) {
+                          ev.preventDefault();
+                          const list = e.stages ?? [];
+                          const at = list.findIndex(x => x.id === st.id);
+                          const to = list[at + (ev.key === "ArrowRight" ? 1 : -1)];
+                          if (!to) return;
+                          A.moveStage(r.id, to.id);
+                          const card = ev.currentTarget as HTMLElement;
+                          requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-card="${r.id}"]`)?.focus() ?? card.blur());
+                        }
+                      }}
+                      data-card={r.id}
                       className={cn(
                         "cursor-grab rounded-md border bg-card p-2.5 text-left shadow-[0_1px_2px_rgba(50,42,25,0.05)] transition-shadow duration-200",
                         "hover:shadow-[0_5px_16px_-8px_rgba(50,42,25,0.28)] active:cursor-grabbing",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--brass))] focus-visible:ring-offset-1",
                         dragId === r.id && "opacity-40"
                       )}
                     >

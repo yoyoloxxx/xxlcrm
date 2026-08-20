@@ -3,7 +3,7 @@
 // то, чего ещё нет, лежит в блоке «Скоро» с честной подписью и компонентом Idle.
 import { useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, setWsMeta, recTitle, recById, allEntities, dispCtx, collapseFieldRuns } from "@/lib/store";
+import { useApp, A, recordsOf, undo, entityCfg, getState, setAuthStage, setWsMeta, recTitle, recById, allEntities, dispCtx, collapseFieldRuns, storageState } from "@/lib/store";
 import { KanbanLive } from "@/components/live/KanbanLive";
 import { TableLive } from "@/components/live/TableLive";
 import { RecordDrawer } from "@/components/live/RecordDrawer";
@@ -24,6 +24,7 @@ import { cloudBoot, renameWs } from "@/lib/cloud";
 import { AuthOverlay, TeamLive } from "@/components/live/AuthLive";
 import { ConstructorDialog, NewEntityDialog } from "@/components/live/ConstructorLive";
 import { PresetPicker } from "@/components/live/PresetPicker";
+import { setupMarks, markSetup } from "@/lib/setup";
 import { EntIcon } from "@/components/live/icons";
 import { TasksLive } from "@/components/live/TasksLive";
 import { MyDayLive } from "@/components/live/MyDayLive";
@@ -37,7 +38,8 @@ import {
   Calendar, Copy, LogIn,
   Columns3, FileUp, Inbox as InboxIcon, LayoutDashboard, ListChecks,
   Moon, Package, PanelLeft, Plus,
-  Route as RouteIcon, Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, Zap, Download,
+  Route as RouteIcon, Search, Settings, SlidersHorizontal, Sparkles, Sun, SunMedium, Table2, X, Zap, Download,
+  TriangleAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -110,6 +112,15 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("xxl-shell-theme", theme); } catch { /* нет хранилища */ }
   }, [theme]);
+  // Первый запуск: сам предлагаю шаблон ниши — иначе человек сидит в чужих демо-сделках
+  // и не догадывается, что раздел настраивается. Спрашиваю ОДИН раз и больше не лезу.
+  useEffect(() => {
+    if (s.mode === "cloud") return;
+    const m = setupMarks();
+    if (m.greeted || m.structure || m.imported) return;
+    const t = window.setTimeout(() => { markSetup("greeted"); setPresetsOnboarding(true); setPresets(true); }, 800);
+    return () => window.clearTimeout(t);
+  }, [s.mode]);
   useEffect(() => {
     initIntegrations(); void cloudBoot(); initAutomations(); // каналы + облако + правила «когда → тогда»
     const t = window.setTimeout(ensureBirthdayTasks, 1500); // напоминания «поздравить» — после загрузки данных
@@ -167,7 +178,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.17</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.18</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -273,6 +284,7 @@ export default function App() {
           ); })() : <Idle className="h-8 border-0 px-1"><Avatar n="Г" hue={42} size={26} /></Idle>}
         </header>
 
+        <StorageAlarm />
         <main className="min-h-0 flex-1 overflow-y-auto max-md:pb-[56px]">
           {page === "myday" && <MyDayLive goTasks={() => setPage("tasks")} goInbox={() => setPage("inbox")}
             goSettings={() => setPage("settings")} onPresets={openPresets} goEntity={() => setPage("ent:" + (s.entities[0]?.id ?? "deals"))} />}
@@ -307,7 +319,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.17 · телефон, откат структурных правок, подтверждения удалений, честные шаблоны и демо-данные</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.18 · русские даты, обязательные поля, канбан с клавиатуры, честное хранилище и безопасная выгрузка</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -318,7 +330,7 @@ export default function App() {
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
       <PresetPicker open={presets} onOpenChange={o => { setPresets(o); if (!o) setPresetsOnboarding(false); }} hasData={s.records.length > 0} onboarding={presetsOnboarding} onApplied={() => setPage("ent:deals")} />
       {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
-      <Toaster position="bottom-left" toastOptions={{ style: theme === "dark"
+      <Toaster position="bottom-right" toastOptions={{ style: theme === "dark"
         ? { background: "hsl(43 22% 90%)", color: "hsl(40 12% 12%)", border: "none", fontSize: "13px", fontFamily: "inherit" }
         : { background: "hsl(40 18% 13%)", color: "hsl(45 40% 96%)", border: "none", fontSize: "13px", fontFamily: "inherit" } }} />
     </div>
@@ -383,7 +395,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-3 pt-4 md:px-5">
-        <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} записей`} · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
+        <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} ${plural(count, "запись", "записи", "записей")}`} · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
           <button onClick={openSetup}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
@@ -421,7 +433,14 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
               <input value={q} onChange={ev => setQ(ev.target.value)} placeholder="Поиск в разделе…"
-                className="h-7 w-40 rounded-md border bg-card pl-7 pr-2 text-[12px] outline-none transition-colors focus:border-ring" />
+                onKeyDown={ev => { if (ev.key === "Escape") { setQ(""); (ev.target as HTMLInputElement).blur(); } }}
+                className="h-7 w-40 rounded-md border bg-card pl-7 pr-6 text-[12px] outline-none transition-colors focus:border-ring" />
+              {!!q && (
+                <button onClick={() => setQ("")} title="Очистить поиск" aria-label="Очистить поиск"
+                  className="press absolute right-1 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground">
+                  <X className="size-3" />
+                </button>
+              )}
             </div>
             <FilterBar entity={e} conds={conds} onChange={setConds}
               onSave={(name, c) => { setSegs(prev => [...prev, { id: "sv" + Date.now().toString(36), name, conds: c }]); toast.success(`Сегмент «${name}» сохранён`); }} />
@@ -442,6 +461,12 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
                 {segs.map(sv => <SelectItem key={sv.id} value={"sv:" + sv.id}>★ {sv.name}</SelectItem>)}
               </SelectContent>
             </Select>
+            {filterOn && (
+              <button onClick={() => { setQ(""); setMine(false); setSeg("all"); setConds([]); }} title="Сбросить поиск, сегмент и фильтры"
+                className="press inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[12px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
+                <X className="size-3" /> Сбросить
+              </button>
+            )}
             <button onClick={() => setMine(m => !m)} title="Только мои записи"
               className={cn("press inline-flex h-7 items-center rounded-md border px-2.5 text-[12px] transition-colors duration-150",
                 mine ? "border-transparent font-medium" : "text-muted-foreground hover:border-foreground/25 hover:text-foreground")}
@@ -452,7 +477,15 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {activeView === "kanban" && hasStages && <KanbanLive entity={e} filter={filterOn ? pred : undefined} />}
+        {activeView === "kanban" && hasStages && (
+          <>
+            <KanbanLive entity={e} filter={filterOn ? pred : undefined} />
+            <p className="px-4 pb-3 text-[11px] text-muted-foreground">
+              Карточку можно тащить мышью или перенести с клавиатуры: Tab до карточки, Ctrl+← / Ctrl+→.
+              Выделить несколько записей и сменить им стадию, ответственного или поставить задачу — во вкладке «Таблица».
+            </p>
+          </>
+        )}
         {activeView === "table" && <TableLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "calendar" && <CalendarLive entity={e} filter={filterOn ? pred : undefined} />}
         {activeView === "stats" && <Dashboard entity={e} />}
@@ -622,6 +655,22 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
 }
 
 // Демо-данные: пока в базе примеры, человек должен знать, что это не его бизнес
+// Хранилище браузера отказало — молчать нельзя: всё, что человек делает, живёт до закрытия вкладки
+function StorageAlarm() {
+  useApp();
+  const st = storageState();
+  if (!st.broken) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b bg-destructive/10 px-4 py-2">
+      <TriangleAlert className="size-4 shrink-0 text-destructive" />
+      <span className="text-[12px] leading-snug text-destructive">
+        <b className="font-semibold">База не сохраняется.</b> Браузер не даёт больше места ({Math.round(st.bytes / 1e5) / 10} МБ).
+        Изменения пропадут при закрытии вкладки — выгрузите разделы в CSV и переходите в облачное пространство.
+      </span>
+    </div>
+  );
+}
+
 function DemoNotice() {
   const s = useApp();
   const [armed, setArmed] = useState(false);

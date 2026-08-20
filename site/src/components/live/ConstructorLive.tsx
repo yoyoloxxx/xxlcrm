@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2 } from "lucide-react";
 import { EntIcon, ICON_NAMES } from "./icons";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +38,10 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
   useApp();
   const e = allEntities().find(x => x.id === entityId);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [dragStage, setDragStage] = useState<string | null>(null);
+  const [dragField, setDragField] = useState<string | null>(null);
+  const [overField, setOverField] = useState<number | null>(null);
+  const [overStage, setOverStage] = useState<number | null>(null);
   if (!e) return null;
   return (
     <Dialog open={open} onOpenChange={o => { onOpenChange(o); if (!o) setConfirmDel(false); }}>
@@ -58,7 +62,8 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
           <TabsContent value="fields" className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-3">
             <div className="flex flex-col gap-1.5">
               {e.fields.map((f, i) => (
-                <FieldRow key={f.id} entityId={e.id} f={f} isTitle={f.id === e.titleFieldId} first={i === 0} last={i === e.fields.length - 1} />
+                <FieldRow key={f.id} entityId={e.id} f={f} index={i} isTitle={f.id === e.titleFieldId} first={i === 0} last={i === e.fields.length - 1}
+                  drag={dragField} setDrag={setDragField} over={overField} setOver={setOverField} />
               ))}
             </div>
             <AddFieldRow entityId={e.id} />
@@ -74,14 +79,23 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
               <>
                 <div className="flex flex-col gap-1.5">
                   {e.stages.map((stg, i) => (
-                    <div key={stg.id} className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5">
+                    <div key={stg.id}
+                      draggable
+                      onDragStart={ev => { ev.dataTransfer.setData("text/plain", stg.id); setDragStage(stg.id); }}
+                      onDragEnd={() => { setDragStage(null); setOverStage(null); }}
+                      onDragOver={ev => { if (!dragStage) return; ev.preventDefault(); setOverStage(i); }}
+                      onDrop={ev => { ev.preventDefault(); if (dragStage) A.stageMoveTo(e.id, dragStage, i); setDragStage(null); setOverStage(null); }}
+                      className={cn("flex items-center gap-2 rounded-md border bg-background px-2 py-1.5",
+                        dragStage === stg.id && "opacity-40",
+                        overStage === i && dragStage && dragStage !== stg.id && "ring-1 ring-[hsl(var(--brass)/0.7)]")}>
+                      <span className="cursor-grab text-muted-foreground/50 active:cursor-grabbing" title="Перетащить, чтобы поменять порядок" aria-hidden><GripVertical className="size-3.5" /></span>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <button className="h-5 w-5 shrink-0 rounded-[5px] border" style={{ background: stg.color }} title="Цвет стадии" />
+                          <button aria-label={`Цвет стадии «${stg.label}»`} className="h-5 w-5 shrink-0 rounded-[5px] border" style={{ background: stg.color }} title="Цвет стадии" />
                         </PopoverTrigger>
                         <PopoverContent className="w-fit p-2">
                           <div className="grid grid-cols-5 gap-1.5">
-                            {PALETTE.map(c => <button key={c} className="h-6 w-6 rounded-[5px]" style={{ background: c }} onClick={() => A.stageUpdate(e.id, stg.id, { color: c })} />)}
+                            {PALETTE.map(c => <button key={c} aria-label={`Цвет ${c}`} className="h-6 w-6 rounded-[5px]" style={{ background: c }} onClick={() => A.stageUpdate(e.id, stg.id, { color: c })} />)}
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -96,8 +110,8 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                         </SelectContent>
                       </Select>
                       <div className="flex shrink-0">
-                        <button disabled={i === 0} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, -1)}><ArrowUp className="size-3.5" /></button>
-                        <button disabled={i === e.stages!.length - 1} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, 1)}><ArrowDown className="size-3.5" /></button>
+                        <button disabled={i === 0} aria-label={`Стадию «${stg.label}» выше`} title="Выше" className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, -1)}><ArrowUp className="size-3.5" /></button>
+                        <button disabled={i === e.stages!.length - 1} aria-label={`Стадию «${stg.label}» ниже`} title="Ниже" className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.stageMove(e.id, stg.id, 1)}><ArrowDown className="size-3.5" /></button>
                         <DeleteStage entityId={e.id} stageId={stg.id} />
                       </div>
                     </div>
@@ -144,7 +158,7 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                 <div>
                   <div className="text-[13px] font-medium">Удалить раздел</div>
                   <div className="text-[11.5px] text-muted-foreground">
-                    {confirmDel ? `Точно удалить «${e.namePlural}» и ${recordsOf(e.id).length} записей? Ctrl+Z вернёт.` : "Вместе со всеми записями раздела"}
+                    {confirmDel ? `Точно удалить «${e.namePlural}» и ${recordsOf(e.id).length} ${plural(recordsOf(e.id).length, "запись", "записи", "записей")}? Ctrl+Z вернёт.` : "Вместе со всеми записями раздела"}
                   </div>
                 </div>
                 <Button variant="outline" size="sm" className="h-8 shrink-0 border-destructive/40 text-destructive hover:bg-destructive/5"
@@ -170,7 +184,7 @@ function DeleteStage({ entityId, stageId }: { entityId: string; stageId: string 
   const n = A.stageCount(entityId, stageId);
   if (!armed) {
     return (
-      <button title={n ? `Удалить стадию — ${n} записей переедет в первую` : "Удалить стадию"}
+      <button title={n ? `Удалить стадию — ${n} ${plural(n, "запись переедет", "записи переедут", "записей переедет")} в первую` : "Удалить стадию"}
         className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => setArmed(true)}>
         <Trash2 className="size-3.5" />
       </button>
@@ -192,7 +206,7 @@ function DeleteField({ entityId, f }: { entityId: string; f: Field }) {
   const used = A.fieldUsage(entityId, f.id);
   if (!armed) {
     return (
-      <button title={used ? `Удалить поле — значения у ${used} записей будут потеряны` : "Удалить поле"}
+      <button title={used ? `Удалить поле — значения у ${used} ${plural(used, "записи", "записей", "записей")} будут потеряны` : "Удалить поле"}
         className="press rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive" onClick={() => setArmed(true)}>
         <Trash2 className="size-3.5" />
       </button>
@@ -208,11 +222,22 @@ function DeleteField({ entityId, f }: { entityId: string; f: Field }) {
   );
 }
 
-function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: Field; isTitle: boolean; first: boolean; last: boolean }) {
+function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, over, setOver }: {
+  entityId: string; f: Field; index: number; isTitle: boolean; first: boolean; last: boolean;
+  drag: string | null; setDrag: (v: string | null) => void; over: number | null; setOver: (v: number | null) => void;
+}) {
   const typeLabel = FIELD_TYPES.find(t => t.type === f.type)?.label ?? f.type;
   const relName = f.type === "relation" ? allEntities().find(e => e.id === f.relationTo)?.namePlural : null;
   return (
-    <div className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5">
+    <div
+      draggable
+      onDragStart={ev => { ev.dataTransfer.setData("text/plain", f.id); setDrag(f.id); }}
+      onDragEnd={() => { setDrag(null); setOver(null); }}
+      onDragOver={ev => { if (!drag) return; ev.preventDefault(); setOver(index); }}
+      onDrop={ev => { ev.preventDefault(); if (drag) A.fieldMoveTo(entityId, drag, index); setDrag(null); setOver(null); }}
+      className={cn("flex items-center gap-2 rounded-md border bg-background px-2 py-1.5",
+        drag === f.id && "opacity-40", over === index && drag && drag !== f.id && "ring-1 ring-[hsl(var(--brass)/0.7)]")}>
+      <span className="cursor-grab text-muted-foreground/50 active:cursor-grabbing" title="Перетащить, чтобы поменять порядок" aria-hidden><GripVertical className="size-3.5" /></span>
       <Input value={f.label} onChange={ev => A.fieldUpdate(entityId, f.id, { label: ev.target.value })}
         className="h-8 flex-1 border-transparent bg-transparent px-1.5 text-[13px] font-medium focus-visible:border-input" />
       {f.type === "relation" ? (
@@ -229,7 +254,16 @@ function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: 
       )}
       {f.type === "select" && <OptionsEditor entityId={entityId} f={f} />}
       <button
+        title={f.required ? "Обязательное — напомню, если не заполнено" : "Сделать обязательным"}
+        aria-pressed={!!f.required}
+        onClick={() => A.fieldUpdate(entityId, f.id, { required: !f.required })}
+        className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.required ? "font-medium" : "text-muted-foreground/60")}
+        style={f.required ? { background: "hsl(var(--brass) / 0.14)", color: "var(--brass-ink)" } : undefined}>
+        обязательное
+      </button>
+      <button
         title={f.inTable === false ? "Показать колонку в таблице" : "Скрыть колонку из таблицы"}
+        aria-pressed={f.inTable !== false}
         onClick={() => A.fieldUpdate(entityId, f.id, { inTable: f.inTable === false ? true : false })}
         className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.inTable === false ? "text-muted-foreground/60" : "font-medium")}
         style={f.inTable !== false ? { background: "hsl(var(--brass) / 0.14)", color: "var(--brass-ink)" } : undefined}>
@@ -239,8 +273,8 @@ function FieldRow({ entityId, f, isTitle, first, last }: { entityId: string; f: 
         <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium" style={{ background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" }}>заголовок</span>
       ) : (
         <div className="flex shrink-0">
-          <button disabled={first} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, -1)}><ArrowUp className="size-3.5" /></button>
-          <button disabled={last} className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, 1)}><ArrowDown className="size-3.5" /></button>
+          <button disabled={first} aria-label={`Поле «${f.label}» выше`} title="Выше" className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, -1)}><ArrowUp className="size-3.5" /></button>
+          <button disabled={last} aria-label={`Поле «${f.label}» ниже`} title="Ниже" className="press rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-30" onClick={() => A.fieldMove(entityId, f.id, 1)}><ArrowDown className="size-3.5" /></button>
           <DeleteField entityId={entityId} f={f} />
         </div>
       )}
