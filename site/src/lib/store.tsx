@@ -245,9 +245,19 @@ const emit = () => {
 window.addEventListener("pagehide", () => {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; dispatchSave(); }
 });
+// Намеренный уход (выход из аккаунта) не должен упираться в сторож «не закрывайте вкладку»:
+// раньше выход из облака вызывал reload, сторож его отменял — и человек оставался в интерфейсе
+// «облако · синхронно» уже БЕЗ сессии: кнопка выхода просто не работала.
+let leaving = false;
+export function allowUnload(): void { leaving = true; }
+/** Немедленно отправить отложенное сохранение (не ждать 300 мс дебаунса). */
+export function flushSaves(): void {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; dispatchSave(); }
+}
 // В облаке сохранение уходит по сети и может не успеть. Приложение само просит «не закрывайте
 // вкладку» — значит, обязано и придержать её, а не молча отпустить работу в никуда.
 window.addEventListener("beforeunload", e => {
+  if (leaving) return;
   if (st.mode !== "cloud") return;
   if (!saveTimer && !cloudPending()) return;
   e.preventDefault();

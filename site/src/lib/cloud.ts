@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { inboundBoot, inboundSubscribe } from "./inbound";
 import { toast } from "sonner";
@@ -103,8 +103,16 @@ export async function signIn(email: string, password: string): Promise<string | 
 }
 
 export async function signOutCloud(): Promise<void> {
+  // Сначала дать несохранённому уйти в базу — выход не должен тихо съедать последние правки.
+  flushSaves();
+  const till = Date.now() + 4000;                    // потолок: лежит сеть — человек всё равно выходит
+  while ((saving || dirtyAgain) && Date.now() < till) await new Promise(r => setTimeout(r, 120));
+  if (saving || dirtyAgain || cloudBroken) {
+    if (!window.confirm("Часть изменений не ушла в облако. Выйти всё равно? Несохранённое пропадёт.")) return;
+  }
   try { await supa.auth.signOut(); } catch { /* сессии нет */ }
-  window.location.reload(); // чистый возврат в демо-режим
+  allowUnload();             // уход намеренный: сторож «не закрывайте вкладку» здесь только запирал человека в мёртвом интерфейсе
+  window.location.reload();  // чистый возврат в демо-режим
 }
 
 async function afterLogin(): Promise<void> {
