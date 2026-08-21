@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { plural, type IntStatus } from "@/lib/model";
 import { useApp, A, storageState } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user-lazy";
 import { Input } from "@/components/ui/input";
@@ -248,6 +248,17 @@ export function IntegrationsLive() {
     setOwnHook(url);
     navigator.clipboard?.writeText(url).then(() => toast.success("URL приёмника скопирован", { description: "Вставьте в Тильде: Формы → Webhook" }));
   };
+  // Адрес приёмника жил только в состоянии этого экрана: ушёл в другой раздел — и он пропал,
+  // хотя на сервере всё настроено. Человек оставался без адреса, который уже вставил на сайт,
+  // и не мог проверить, тот ли он. Поэтому при открытии настроек читаем уже созданный.
+  useEffect(() => {
+    if (s.mode !== "cloud" || !s.wsId || ownHook) return;
+    let живо = true;
+    void getHookSecret("tilda").then(secret => {
+      if (живо && secret && s.wsId) setOwnHook(hookUrl(s.wsId, "tilda", secret));
+    });
+    return () => { живо = false; };
+  }, [s.mode, s.wsId, ownHook]);
 
   return (
     <div className="px-4 py-3.5">
@@ -325,6 +336,10 @@ export function IntegrationsLive() {
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Вставьте в Тильде: Настройки сайта → Формы → Webhook. Работает всегда, браузер не нужен.</p>
           <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{ownHook}</code>
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="outline" className="h-8 gap-1.5 text-[12px]"
+              onClick={() => navigator.clipboard?.writeText(ownHook).then(() => toast.success("Адрес скопирован"))}>
+              <Copy className="size-3.5" /> Скопировать
+            </Button>
             <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
               if (!window.confirm("Перевыпустить секрет? Старый адрес перестанет работать, и его нужно будет заменить в форме на сайте.")) return;
               const secret = await rotateHookSecret("tilda");

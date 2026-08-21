@@ -40,6 +40,17 @@ export async function rotateHookSecret(source: InboundSource): Promise<string | 
   return secret;
 }
 
+/** Прочитать секрет приёмника, НЕ создавая его. Нужно, чтобы показать уже настроенный
+    адрес при открытии настроек: раньше он жил только в состоянии экрана и пропадал при
+    уходе с него — человек оставался без адреса, который уже вставил себе на сайт. */
+export async function getHookSecret(source: InboundSource): Promise<string | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const { data, error } = await supa.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", source).maybeSingle();
+  if (error || !data?.secret) return null;
+  return String(data.secret);
+}
+
 export async function ensureHookSecret(source: InboundSource): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;

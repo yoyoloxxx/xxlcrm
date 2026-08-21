@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.18"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.19"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -265,6 +265,11 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   if (relF && clientId) values[relF.id] = clientId;
   const srcOpt = sourceOption(entity, src);
   if (srcOpt) values[srcOpt.fieldId] = srcOpt.optionId;
+  // ТО, ЧТО ЧЕЛОВЕК НАПИСАЛ, — главное в заявке. У формы с сайта диалога нет (чат заводится
+  // только для мессенджеров), и раньше текст не попадал в CRM вообще: он уходил лишь в
+  // уведомление в Telegram. Не подключил уведомления — не узнал, о чём была заявка.
+  const noteF = entity.fields?.find((f: Any) => f.type === "textarea");
+  if (noteF && msg.text) values[noteF.id] = msg.text.slice(0, 2000);
 
   const recId = uid("r");
   await must(db.from("records").insert({
@@ -275,6 +280,9 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   await db.from("activities").insert([
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs, kind: "created", text: "Запись создана", user_id: null },
     { id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs + 1, kind: "comment", text: `Пришло с сервера: ${srcName(src)}${msg.phone ? " · " + msg.phone : ""}`, user_id: null },
+    // и сам текст — отдельной строкой в хронологии, чтобы он был виден даже если
+    // подходящего поля в разделе нет (человек мог перекроить карточку под себя)
+    ...(msg.text ? [{ id: uid("a"), workspace_id: ws, record_id: recId, ts: nowMs + 2, kind: "comment", text: `Текст заявки: ${msg.text.slice(0, 1000)}`, user_id: null }] : []),
   ]);
   await attachChat(chat, existing, recId);
 
