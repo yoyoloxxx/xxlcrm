@@ -36,19 +36,30 @@ function markLegacyDemo(d: { records?: unknown; tasks?: unknown; chats?: unknown
   const recs = Array.isArray(d.records) ? (d.records as Rec[]) : [];
   if (!recs.length || recs.some(r => "demo" in r)) return;   // уже размечено — не вмешиваемся
   const ex = seed();
-  const sig = (e: string, t: unknown) => e + "|" + String(t ?? "").trim();
-  const rs = new Set(ex.records.map(r => sig(r.entityId, r.values.title)));
+  // Узкая, а не по одному названию: у настоящей записи «Мужская стрижка» не должно быть шанса
+  // сойти за пример. Клиента опознаём по имени+телефону, сделку — по названию+сумме.
+  const digitsOf = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+  const clientSig = (e: string, name: unknown, phone: unknown) => e + "|c|" + String(name ?? "").trim() + "|" + digitsOf(phone);
+  const dealSig = (e: string, title: unknown, amount: unknown) => e + "|d|" + String(title ?? "").trim() + "|" + String(amount ?? "");
+  const rs = new Set<string>();
+  for (const r of ex.records) {
+    rs.add(clientSig(r.entityId, r.values.title, (r.values as Record<string, unknown>).phone));
+    rs.add(dealSig(r.entityId, r.values.title, (r.values as Record<string, unknown>).amount));
+  }
   const ts = new Set(ex.tasks.map(t => t.title));
   const cs = new Set(ex.chats.map(c => c.name));
   // Примеры ниш раньше создавались вообще без метки: «Очистить примеры» отвечало
   // «примеров уже нет», а выдуманные клиенты уезжали в облако как своя работа.
   // Новые помечаются при создании; у тех, кто применил шаблон раньше, узнаём их здесь.
   for (const p of PRESETS) {
-    for (const c of p.clients) rs.add(sig("contacts", c.name));
-    for (const d of p.deals) rs.add(sig("deals", d.title));
+    for (const c of p.clients) rs.add(clientSig("contacts", c.name, c.phone));
+    for (const d of p.deals) rs.add(dealSig("deals", d.title, d.amount));
     for (const ch of p.chats ?? []) cs.add(ch.name);
   }
-  for (const r of recs) if (rs.has(sig(r.entityId, r.values.title))) r.demo = true;
+  for (const r of recs) {
+    const v = r.values as Record<string, unknown>;
+    if (rs.has(clientSig(r.entityId, r.values.title, v.phone)) || rs.has(dealSig(r.entityId, r.values.title, v.amount))) r.demo = true;
+  }
   if (Array.isArray(d.tasks)) for (const t of d.tasks as Task[]) if (ts.has(t.title)) t.demo = true;
   if (Array.isArray(d.chats)) for (const c of d.chats as Chat[]) if (cs.has(c.name)) c.demo = true;
 }

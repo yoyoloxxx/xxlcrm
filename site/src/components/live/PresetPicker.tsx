@@ -45,7 +45,7 @@ export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplie
   const s0 = getState();
   const counts = {
     records: s0.records.length, chats: s0.chats.length, tasks: s0.tasks.length,
-    mine: s0.records.filter(r => !r.demo).length + s0.chats.filter(c => !c.demo).length,
+    mine: s0.records.filter(r => !r.demo).length + s0.chats.filter(c => !c.demo).length + s0.tasks.filter(t => !t.demo).length,
   };
   const apply = (p: Preset) => { A.applyPreset(p.id); onApplied(); close(false); };
   const pick = (p: Preset) => (hasData ? setConfirm(p) : apply(p));
@@ -60,13 +60,17 @@ export function PresetPicker({ open, onOpenChange, hasData, onboarding, onApplie
             <DialogHeader>
               <DialogTitle className="text-[15px]">Применить «{confirm.label}»?</DialogTitle>
               <DialogDescription className="text-[12.5px] leading-relaxed">
-                Это заменит разделы и воронку{confirm.custom ? "" : ", а записи — примерами ниши"}. Уйдут и те, о ком раньше
-                предупреждение молчало: <b className="font-medium text-foreground">
-                {counts.records} {plural(counts.records, "запись", "записи", "записей")},
-                {" "}{counts.chats} {plural(counts.chats, "диалог", "диалога", "диалогов")},
-                {" "}{counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}
-                </b>{counts.mine > 0 && <> — из них <b className="font-medium text-foreground">{counts.mine} не из примеров</b></>}.
-                {" "}Вернуть — кнопкой «Отменить» в сообщении сразу после применения (или Ctrl+Z). Свою базу лучше сначала выгрузить в CSV.
+                {counts.mine === 0 ? (
+                  // На экране одни примеры: пугать новичка «уйдут 13 записей» нечестно — своего у него ещё ничего нет
+                  <>Это настроит разделы и воронку{confirm.custom ? "" : " и заменит примеры на примеры этой ниши"}. Ваших данных здесь ещё нет — терять нечего. Передумаете — Ctrl+Z вернёт как было.</>
+                ) : (
+                  <>Это заменит разделы и воронку{confirm.custom ? "" : ", а записи — примерами ниши"}. Уйдут <b className="font-medium text-foreground">
+                  {counts.records} {plural(counts.records, "запись", "записи", "записей")},
+                  {" "}{counts.chats} {plural(counts.chats, "диалог", "диалога", "диалогов")},
+                  {" "}{counts.tasks} {plural(counts.tasks, "задача", "задачи", "задач")}
+                  </b> — из них <b className="font-medium text-foreground">{counts.mine} {plural(counts.mine, "ваша", "ваши", "ваших")}, не из примеров</b>.
+                  {" "}Вернуть — кнопкой «Отменить» сразу после применения (или Ctrl+Z). Свою базу лучше сначала выгрузить в CSV.</>
+                )}
               </DialogDescription>
             </DialogHeader>
             <div className="flex gap-2">

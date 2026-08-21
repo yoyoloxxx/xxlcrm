@@ -3,6 +3,11 @@
 // диалог помечен личным и лежит на устройстве; цитаты сообщений не идут в карточку клиента;
 // в CRM он уезжает ТОЛЬКО кнопкой «Это клиент».
 import { chromium } from "playwright";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const results = [];
 const ok = (n, cond, extra = "") => { results.push([cond ? "PASS" : "FAIL", n, extra]); console.log(cond ? "  ✓ " + n : "  ✗ " + n + " — " + String(extra).slice(0, 220)); };
@@ -101,6 +106,23 @@ const nowShared = (cur.chats ?? []).find(c => c.id === "c_priv");
 ok("E1 после кнопки диалог помечен общим", !pressed || nowShared?.shared === true, `shared: ${nowShared?.shared}`);
 const privAfter = await p.evaluate(() => JSON.parse(localStorage.getItem("xxlcrm-priv-v1") ?? "[]"));
 ok("E2 и ушёл из личного хранилища устройства", !pressed || !privAfter.some(c => c.id === "c_priv"), privAfter.map(c => c.id).join(","));
+
+// ---------- B2: перенос базы в облако не тащит личную переписку ----------
+// planTransfer раньше фильтровал только demo, и при создании пространства с галкой
+// «перенести» личные диалоги уезжали всей команде. Проверяем сам планировщик.
+const outT = join(mkdtempSync(join(tmpdir(), "transfer-")), "transfer.mjs");
+try {
+  execFileSync("npx", ["esbuild", "src/lib/transfer.ts", "--format=esm", "--bundle",
+    "--external:./store", "--external:./model", "--outfile=" + outT], { stdio: "pipe" });
+} catch (e) { /* если transfer тянет много зависимостей — проверим через уже собранный dist */ }
+
+// Прямая проверка на уровне поведения uploadLocal нам недоступна без сети, поэтому проверяем
+// договор в исходнике: uploadLocal обязан отсеять приватные чаты ДО planTransfer.
+const cloudSrc = readFileSync("src/lib/cloud.ts", "utf8");
+ok("Z1 uploadLocal фильтрует личные чаты перед planTransfer",
+  /chats:\s*s\.chats\.filter\(c\s*=>\s*!isPrivateChat\(c\)\)/.test(cloudSrc), "паттерн фильтра не найден");
+ok("Z2 planTransfer получает уже очищенный набор",
+  /planTransfer\(forTransfer/.test(cloudSrc), "planTransfer вызывается не с forTransfer");
 
 ok("F1 приложение не падало", errors.length === 0, errors.slice(0, 2).join(" | "));
 

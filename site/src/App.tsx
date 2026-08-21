@@ -207,16 +207,24 @@ export default function App() {
             {iAmOwner() && <Copy className="size-3.5 shrink-0 text-muted-foreground" />}
           </button>
         ) : (
-          <button
-            onClick={() => setAuthStage("auth")}
-            title="Войти или создать аккаунт — данные станут общими для команды"
-            className="press mx-3 mb-3 flex items-center justify-between gap-2 rounded-md border border-dashed bg-card px-2.5 py-[7px] text-left transition-colors duration-150 hover:border-foreground/25">
-            <span>
+          // Клик по ИМЕНИ ведёт переименовывать, а не логиниться: первым делом человек хочет
+          // убрать чужое «Digital Loft», и раньше это самое очевидное действие открывало
+          // форму входа. Вход — отдельной строкой со своей иконкой.
+          <div className="mx-3 mb-3 rounded-md border border-dashed bg-card">
+            <button
+              onClick={() => go("settings")}
+              title="Название компании — изменить в настройках"
+              className="press block w-full px-2.5 pb-1 pt-[7px] text-left transition-colors duration-150 hover:text-foreground">
               <span className="block truncate text-[12.5px] font-medium">{s.wsName}</span>
-              <span className="block text-[9.5px] text-muted-foreground">только это устройство · войти</span>
-            </span>
-            <LogIn className="size-3.5 shrink-0 text-muted-foreground" />
-          </button>
+            </button>
+            <button
+              onClick={() => setAuthStage("auth")}
+              title="Войти или создать аккаунт — данные станут общими для команды"
+              className="press flex w-full items-center justify-between gap-2 px-2.5 pb-[7px] text-left text-muted-foreground transition-colors duration-150 hover:text-foreground">
+              <span className="block text-[9.5px]">только это устройство · войти</span>
+              <LogIn className="size-3.5 shrink-0" />
+            </button>
+          </div>
         )}
 
         <nav className="flex flex-col gap-px px-3">

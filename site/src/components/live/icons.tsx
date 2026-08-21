@@ -2,13 +2,14 @@
 import type { CSSProperties } from "react";
 import {
   Briefcase, Building2, Cake, Calendar, Contact2, FileText, Folder, GraduationCap,
-  Heart, Home, Package, ShoppingCart, Star, Truck, Users, Wrench,
+  Heart, Home, Megaphone, Package, ShoppingCart, Star, Target, Truck, Users, Wrench,
 } from "lucide-react";
 
 const MAP: Record<string, React.ElementType> = {
   briefcase: Briefcase, building: Building2, users: Users, folder: Folder, package: Package,
   cart: ShoppingCart, home: Home, wrench: Wrench, heart: Heart, star: Star,
   file: FileText, truck: Truck, graduation: GraduationCap, contact: Contact2, calendar: Calendar, cake: Cake,
+  target: Target, megaphone: Megaphone,
 };
 
 export const ICON_NAMES = Object.keys(MAP);

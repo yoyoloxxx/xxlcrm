@@ -91,6 +91,8 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
         <h1 className="text-[21px] font-semibold tracking-tight">{hello}{me ? `, ${me}` : ""}</h1>
         <p className="mt-0.5 text-[12.5px] text-muted-foreground">
           {dateStr} — {data.todayTasks.length ? `сегодня и просрочено: ${data.todayTasks.length}` : "на сегодня задач нет"}{data.noNext.length ? `, без следующего шага: ${data.noNext.length}` : ""}
+          {/* «Открыл впервые — уже всё просрочено» пугает; если это целиком примеры, говорим прямо */}
+          {data.todayTasks.length > 0 && data.todayTasks.every(t => t.demo) && " — это примеры, не ваши долги"}
         </p>
       </div>
 

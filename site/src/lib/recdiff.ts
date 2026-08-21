@@ -19,9 +19,16 @@ export function recDiff(prev: Rec, next: Rec, nowMs = Date.now()): Merge | null 
   const patch: Record<string, unknown> = {};
   const drop: string[] = [];
   const a = prev.values ?? {}, b = next.values ?? {};
-  for (const k of Object.keys(b)) if (!same(a[k], b[k])) patch[k] = b[k];
-  // Пустая строка — это значение («телефон стёрли, но поле оставили»), а не удаление поля.
-  for (const k of Object.keys(a)) if (!(k in b)) drop.push(k);
+  for (const k of Object.keys(b)) {
+    if (same(a[k], b[k])) continue;
+    // Очистка «выбора», числа, связи, даты приходит из UI как undefined (ключ остаётся, значение
+    // снято). Это УДАЛЕНИЕ поля, а не правка: без этой ветки undefined выпадал при JSON.stringify,
+    // на сервер уходил пустой patch, поле не очищалось — и ответ базы возвращал старое значение.
+    if (b[k] === undefined) drop.push(k);
+    else patch[k] = b[k];
+  }
+  // Пустая СТРОКА — это значение («телефон стёрли, но поле оставили»), а не удаление поля.
+  for (const k of Object.keys(a)) if (!(k in b) && a[k] !== undefined) drop.push(k);
 
   const scalars: Record<string, unknown> = {};
   if (prev.stageId !== next.stageId) { scalars.stage_id = next.stageId ?? ""; scalars.stage_at = next.stageAt ?? nowMs; }

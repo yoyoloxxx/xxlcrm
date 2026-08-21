@@ -26,6 +26,8 @@ const diff = {
   drugayaSut:      recDiff(base, mk(x => { x.entityId = "deals"; x.values.amount = 5; })),
   pustoeZnachenie: recDiff(base, mk(x => { x.values.phone = ""; })),
   novoePole:       recDiff(base, mk(x => { x.values.comment = "перезвонить"; })),
+  ochistkaUndef:   recDiff(base, mk(x => { x.values.amount = undefined; })),   // так UI чистит число/выбор/связь/дату
+  ochistkaScalar:  recDiff(base, mk(x => { x.stageId = undefined; })),
   vladelec:        recDiff(base, mk(x => { x.ownerId = "u2"; })),
 };
 const errors = [];
@@ -52,6 +54,11 @@ ok("F1 новое поле уходит как обычная правка",
   JSON.stringify(diff.novoePole?.patch) === JSON.stringify({ comment: "перезвонить" }), JSON.stringify(diff.novoePole?.patch));
 ok("F2 смена ответственного — скаляр, поля не трогаются",
   diff.vladelec?.scalars?.owner_id === "u2" && Object.keys(diff.vladelec?.patch ?? {}).length === 0, JSON.stringify(diff.vladelec));
+ok("H1 очистка поля через undefined (как в UI) — это drop, а не пустой patch",
+  JSON.stringify(diff.ochistkaUndef?.drop) === JSON.stringify(["amount"]) && Object.keys(diff.ochistkaUndef?.patch ?? {}).length === 0,
+  JSON.stringify(diff.ochistkaUndef));
+ok("H2 в patch не уходит undefined (иначе JSON.stringify его выкинет, и поле не очистится)",
+  !("amount" in (diff.ochistkaUndef?.patch ?? {})), JSON.stringify(diff.ochistkaUndef?.patch));
 ok("G1 обошлось без ошибок", errors.length === 0, errors.join(" | "));
 
 const bad = results.filter(r => r[0] === "FAIL");

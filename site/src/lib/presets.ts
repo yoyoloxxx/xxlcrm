@@ -145,6 +145,56 @@ export const PRESETS: Preset[] = [
   },
 
   {
+    id: "smm",
+    label: "Агентство / СММ-фрилансер",
+    tagline: "Лиды на ведение соцсетей: бриф, КП, договор, оплата — и клиенты на абонентке",
+    emoji: "📣",
+    accent: "#5C7A9E",
+    entities: [
+      {
+        id: "deals", name: "Лид", namePlural: "Лиды", icon: "target", titleFieldId: "title",
+        fields: [
+          f("title", "Что нужно клиенту", "text", { required: true }),
+          f("amount", "Бюджет в месяц", "money"),
+          f("contact", "Клиент", "relation", { relationTo: "contacts" }),
+          f("source", "Канал", "select", { options: CHANNELS }),
+          f("niche", "Ниша клиента", "text", { inTable: false }),
+          f("notes", "Бриф / заметки", "textarea", { inTable: false }),
+        ],
+        stages: [
+          stg("sm_new", "Новый лид", "#8A8578"), stg("sm_brief", "Бриф и созвон", "#5C7A9E"),
+          stg("sm_kp", "КП отправлено", "#BC9F5C"), stg("sm_deal", "Договор и оплата", "#B0725A"),
+          stg("sm_won", "В работе (абонентка)", "#6E8B4F", "won"),
+          stg("sm_lost", "Отказ", "#A8543F", "lost"),
+        ],
+      },
+      contactsOf([f("project", "Проект / аккаунты", "textarea", { inTable: false })]),
+    ],
+    rules: [
+      { name: "Новый лид → ответить за 15 минут", enabled: true, trigger: { type: "record_created", entityId: "deals" }, action: { type: "task", title: "Ответить лиду (первый касается — тот и берёт)", kind: "msg", afterHours: 0.25 } },
+      { name: "Бриф прошёл → отправить КП за день", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_kp" }, action: { type: "task", title: "Проверить, что КП ушло, и назначить срок ответа", kind: "todo", afterHours: 0 } },
+      { name: "КП без ответа 3 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 3 }, action: { type: "task", title: "Напомнить про КП — спросить, что смущает", kind: "msg", afterHours: 1 } },
+      { name: "Договор → выставить счёт", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_deal" }, action: { type: "task", title: "Выставить счёт и прислать договор", kind: "todo", afterHours: 0 } },
+      { name: "В работе → отчёт в конце месяца", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_won" }, action: { type: "task", title: "Поставить напоминание об отчёте и продлении", kind: "todo", afterHours: 1 } },
+      { name: "Тишина 60 дней → вернуть клиента", enabled: true, trigger: { type: "quiet", entityId: "deals", days: 60 }, action: { type: "task", title: "Показать свежие кейсы — предложить аудит соцсетей", kind: "msg", afterHours: 1 } },
+    ],
+    clients: [
+      { key: "vika", name: "Виктория (кофейня «Зерно»)", phone: "+7 921 660-31-77", channel: "Instagram", wishes: "Ведение Instagram + VK, съёмки раз в месяц" },
+      { key: "andrey", name: "Андрей, автосервис", phone: "+7 903 415-28-90", channel: "Telegram" },
+      { key: "lera", name: "Лера, школа танцев", phone: "+7 999 302-84-15", channel: "WhatsApp", wishes: "Таргет + контент, бюджет до 60к" },
+    ],
+    deals: [
+      { title: "Ведение соцсетей кофейни", amount: 45000, stage: "sm_new", channel: "Instagram", client: "vika", ago: 0 },
+      { title: "Контент для автосервиса", amount: 35000, stage: "sm_brief", channel: "Telegram", client: "andrey", ago: 1 },
+      { title: "Таргет для школы танцев", amount: 60000, stage: "sm_kp", channel: "WhatsApp", client: "lera", ago: 3 },
+      { title: "Ведение VK (продление)", amount: 40000, stage: "sm_won", channel: "Telegram", client: "andrey", ago: 25 },
+    ],
+    chats: [
+      { name: "Виктория (кофейня «Зерно»)", channel: "ig", dealTitle: "Ведение соцсетей кофейни", unread: 1, phone: "+7 921 660-31-77", msgs: [[1, false, "Здравствуйте! Видела ваши кейсы — сколько стоит ведение Instagram для кофейни? Нужны и сторис, и лента."]] },
+    ],
+  },
+
+  {
     id: "bakery",
     label: "Кондитерская / торты на заказ",
     tagline: "Заказы к дате, предоплата, декор и доставка",

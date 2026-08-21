@@ -138,8 +138,9 @@ const privTexts = (rows: Row[]): string[] => {
   return out;
 };
 // Событие в карточке — это «Telegram, клиент: <текст сообщения>». Совпадение по хвосту, а не
-// по вхождению: короткое «ок» иначе снесло бы чужие комментарии.
-const quotesPrivate = (actText: string, texts: string[]) => texts.some(t => actText.endsWith(t));
+// по вхождению. И только для сообщений от 12 символов: короткое «ок»/«да» как хвост есть у
+// множества чужих комментариев, и по нему purge снёс бы не своё.
+const quotesPrivate = (actText: string, texts: string[]) => texts.some(t => t.length >= 12 && actText.endsWith(t));
 
 /** Убрать личную переписку из общего пространства. Копия на устройстве остаётся. */
 export async function purgePrivateFromCloud(): Promise<{ chats: number; acts: number } | string> {
@@ -214,6 +215,10 @@ export async function deleteWs(id: string): Promise<string | null> {
 export async function switchWs(id: string): Promise<string | null> {
   const u = (await supa.auth.getUser()).data.user;
   if (!u) return "Сессия истекла — войдите заново";
+  // Дожать отложенное сохранение ДО смены пространства: иначе правка, сделанная за 300 мс
+  // до переключения, ушла бы уже с новым wsId — то есть не туда. signOutCloud так и делает.
+  flushSaves();
+  for (let i = 0; i < 40 && cloudPendingHook.has?.(); i++) await new Promise(r => setTimeout(r, 50));
   await openWorkspace(id, u.id);
   return null;
 }
@@ -291,9 +296,14 @@ async function uploadLocal(newWs: string, meId: string, src?: Src): Promise<stri
   const s = src ?? getState();
   if (!s.records.some(r => !r.demo) && !s.chats.some(c => !c.demo) && !s.tasks.some(t => !t.demo)) return null;
 
+  // Личная переписка Telegram в общее пространство не уезжает — это обещание продукта.
+  // «Живое» сохранение её фильтрует, а путь ПЕРЕНОСА раньше нет: planTransfer отсеивал
+  // только demo, и при создании пространства с галкой «перенести» личные диалоги утекали
+  // всей команде. Отсекаем их до планировщика.
+  const forTransfer: Src = { ...s, chats: s.chats.filter(c => !isPrivateChat(c)) };
   // Новые id и переписанные ссылки считает planTransfer: id в базе — первичный ключ на всю
   // таблицу, и перенос по старым id УТАЩИЛ БЫ записи из пространства, куда их клали раньше.
-  const plan = planTransfer(s, uid);
+  const plan = planTransfer(forTransfer, uid);
 
   wsId = newWs;                                  // мапперы кладут workspace_id из этой переменной
   // Локальные id сотрудников («u1», «u2») в облаке ничего не значат: всё становится вашим,
@@ -527,6 +537,7 @@ async function doSave(): Promise<void> {
       const seen = new Set<string>();
       const changed: { id: string; j: string; row: Row }[] = [];
       const merges: Merge[] = [];
+      const sentCanon = new Map<string, string>();   // канон записи на момент отправки merge
       for (const item of c.items) {
         seen.add(item.id);
         const j = canon(item);
@@ -535,7 +546,7 @@ async function doSave(): Promise<void> {
         // Существующая карточка — шлём только свои поля. Новая (в базе её ещё нет) — целиком.
         if (c.table === "records" && was && mergeReady) {
           const d = recDiff(JSON.parse(was) as Rec, item as unknown as Rec);
-          if (d) { merges.push(d); continue; }
+          if (d) { merges.push(d); sentCanon.set(item.id, j); continue; }
         }
         changed.push({ id: item.id, j, row: c.toRow(item as never) });
       }
@@ -559,11 +570,16 @@ async function doSave(): Promise<void> {
         const back = ((data ?? []) as Row[]).map(r => M.records.fromRow(r));
         const got = new Set(back.map(r => r.id));
         // Ответ базы — это уже склейка: мои правки поверх того, что успели изменить коллеги.
-        // Забираем её к себе целиком, иначе на экране останется моя устаревшая версия.
+        // Забираем её к себе, НО не поверх правки, которую человек сделал в ту же карточку,
+        // пока RPC летел по сети: тогда на экране версия свежее ответа, и её нельзя откатывать —
+        // следующий doSave до-отправит разницу. Раньше guard'а не было, и правка терялась.
         applyRemote(st2 => {
           for (const inc of back) {
             const k = st2.records.findIndex(r => r.id === inc.id);
-            if (k >= 0) st2.records[k] = inc;
+            if (k < 0) { snap.records.set(inc.id, canon(inc)); continue; }
+            const touched = canon(st2.records[k]) !== sentCanon.get(inc.id);
+            if (touched) continue;                    // человек правил ту же запись — не трогаем
+            st2.records[k] = inc;
             snap.records.set(inc.id, canon(inc));
           }
         });

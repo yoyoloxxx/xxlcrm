@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.19"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.20"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -268,7 +268,13 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   // ТО, ЧТО ЧЕЛОВЕК НАПИСАЛ, — главное в заявке. У формы с сайта диалога нет (чат заводится
   // только для мессенджеров), и раньше текст не попадал в CRM вообще: он уходил лишь в
   // уведомление в Telegram. Не подключил уведомления — не узнал, о чём была заявка.
-  const noteF = entity.fields?.find((f: Any) => f.type === "textarea");
+  // Кладём в поле-заметку ПО СМЫСЛУ, а не в первое попавшееся textarea: у ниши «украшения»
+  // первым идёт «Адрес доставки», и «хочу серьги» попадало бы туда. Адрес/город — не заметка.
+  const textFields = (entity.fields ?? []).filter((f: Any) => f.type === "textarea");
+  const NOTE = /коммент|заметк|сообщен|бриф|пожелан|вопрос|текст|описан|детал/i;
+  const ADDR = /адрес|город|достав|индекс|улиц/i;
+  const noteF = textFields.find((f: Any) => NOTE.test(f.label))
+    ?? textFields.find((f: Any) => !ADDR.test(f.label));   // любое, кроме явного адреса
   if (noteF && msg.text) values[noteF.id] = msg.text.slice(0, 2000);
 
   const recId = uid("r");
