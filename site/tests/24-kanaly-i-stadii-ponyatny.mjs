@@ -1,6 +1,7 @@
-// v0.28: (1) панель фильтров не схлопывается в «непонятный ползунок» на средней ширине,
+// v0.28–0.29: (1) панель фильтров не схлопывается в «непонятный ползунок» на средней ширине,
 // (2) во вкладке «Стадии» видно и меняется, куда приходят заявки, (3) Instagram — настоящая
-// карточка с серверным приёмником, (4) функция hook умеет ig и проверку Meta (hub.challenge).
+// карточка с серверным приёмником, (4) функция hook умеет ig и проверку Meta (hub.challenge),
+// (5) у каждого сервиса кликабельная ссылка «куда идти» и список «что сделать, чтобы заявки приходили».
 import { chromium } from "playwright";
 import { readFileSync } from "node:fs";
 
@@ -84,10 +85,50 @@ const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromi
   const body = await page.textContent("body");
   ok("Instagram больше не «через провайдера» в Скоро", !body.includes("Instagram · через провайдера"));
   ok("Без входа карточка честно зовёт в общее пространство", body.includes("войдите в аккаунт"));
-  ok("Шаги подключения WhatsApp на месте", body.includes("green-api.com"));
+  ok("Шаги подключения WhatsApp на месте", body.includes("кабинет Green API") && body.includes("idInstance"));
   ok("Шаги подключения MAX на месте", body.includes("@MasterBot"));
   ok("У каналов есть метка «куда падают»", (await page.locator("button", { hasText: /^→ / }).count()) >= 3);
   ok("В маршрутах нет «нужен провайдера»", !body.includes("нужен провайдер"));
+
+  // ---------- T3b: у каждого сервиса есть кликабельная ссылка «куда идти» ----------
+  const link = async (href) => (await page.locator(`a[href^="${href}"]`).count()) > 0;
+  ok("Ссылка на @BotFather", await link("https://t.me/BotFather"));
+  ok("Ссылка на кабинет Green API", await link("https://console.green-api.com"));
+  ok("Ссылка на @MasterBot в MAX", await link("https://max.ru/masterbot"));
+  ok("Ссылка на кабинет Meta", await link("https://developers.facebook.com/apps"));
+  ok("Ссылка на Тильду", await link("https://tilda.cc/projects"));
+  ok("Все внешние ссылки открываются в новой вкладке",
+    (await page.locator('a[target="_blank"][rel="noreferrer"]').count()) >= 5);
+  ok("Есть список «Что нужно сделать, чтобы заявки приходили»", body.includes("Что нужно сделать, чтобы заявки приходили"));
+  ok("Список считает, сколько осталось", /осталось \d из 5/.test(body));
+  ok("Каждый канал в списке ведёт к своей карточке", (await page.locator("[data-ch]").count()) >= 6);
+
+  // «вставить сюда» из списка прокручивает к карточке канала и подсвечивает её
+  await page.getByRole("button", { name: "вставить сюда" }).nth(2).click(); // MAX
+  await page.waitForTimeout(700);
+  const maxCard = page.locator('[data-ch="max"]');
+  ok("Клик по «вставить сюда» подсвечивает карточку канала", ((await maxCard.getAttribute("style")) ?? "").includes("box-shadow"));
+  ok("Карточка канала оказалась в видимой части экрана", await maxCard.isVisible());
+  await ctx.close();
+}
+
+// ---------- T3c: «не подключён» в «Приёме заявок» ведёт к настройке канала ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await page.addInitScript(() => localStorage.setItem("xxl-setup-v1", JSON.stringify({ greeted: true, structure: true })));
+  await page.goto(URL);
+  await page.waitForTimeout(1200);
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => { const b = [...document.querySelectorAll("aside button")].find(x => x.textContent?.includes("Приём заявок")); b?.click(); });
+  await page.waitForTimeout(500);
+  const badge = page.locator('[data-route=wa] button', { hasText: "не подключён" });
+  ok("Бейдж «не подключён» — кликабельный", await badge.isVisible());
+  await badge.click();
+  await page.waitForTimeout(900);
+  const waCard = page.locator('[data-ch="wa"]');
+  ok("Клик открыл Настройки на карточке WhatsApp", await waCard.isVisible());
+  ok("И подсветил её", ((await waCard.getAttribute("style")) ?? "").includes("box-shadow"));
   await ctx.close();
 }
 

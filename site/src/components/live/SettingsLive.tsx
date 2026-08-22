@@ -13,8 +13,9 @@ import { toast } from "sonner";
 import { cloudPrivateWeight, purgePrivateFromCloud } from "@/lib/cloud";
 import { supa, SUPA_URL } from "@/lib/supa";
 import { InstaIcon } from "./icons";
+import { focusChannel } from "@/lib/focus";
 
-import { Bell, Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
+import { Bell, Check, Copy, ExternalLink, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SOFT = "text-[11.5px] leading-snug text-muted-foreground";
@@ -54,6 +55,90 @@ function Steps({ items }: { items: React.ReactNode[] }) {
 }
 
 const aCls = "underline underline-offset-2 hover:text-foreground";
+
+// ГЛАВНАЯ КНОПКА КАЖДОГО КАНАЛА: «куда идти, чтобы это заработало».
+// Человек не должен искать сервис в поиске — ссылка открывает нужную страницу сразу.
+function Go({ href, children, dim }: { href: string; children: React.ReactNode; dim?: boolean }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer"
+      className={cn("press inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-opacity hover:opacity-85",
+        dim && "border text-muted-foreground hover:text-foreground")}
+      style={dim ? undefined : { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" }}>
+      {children} <ExternalLink className="size-3" />
+    </a>
+  );
+}
+
+// Куда идти за каждым каналом — одно место на весь файл, чтобы ссылки не разъезжались
+const WHERE: Record<string, { name: string; url: string; go: string; hint: string }> = {
+  tg:   { name: "Telegram-бот", url: "https://t.me/BotFather", go: "Открыть @BotFather", hint: "команда /newbot → токен" },
+  tgu:  { name: "Telegram: личный номер", url: "https://my.telegram.org/apps", go: "Открыть my.telegram.org", hint: "нужен только если нет вшитых ключей" },
+  wa:   { name: "WhatsApp", url: "https://console.green-api.com/", go: "Открыть кабинет Green API", hint: "инстанс → QR → idInstance и токен" },
+  max:  { name: "MAX", url: "https://max.ru/masterbot", go: "Открыть @MasterBot в MAX", hint: "команда /create → токен" },
+  ig:   { name: "Instagram", url: "https://developers.facebook.com/apps/", go: "Открыть кабинет Meta", hint: "приложение → Instagram → Webhooks" },
+  site: { name: "Сайт (форма)", url: "https://tilda.cc/projects/", go: "Открыть Тильду", hint: "Настройки сайта → Формы → Webhook" },
+};
+
+// «Что нужно сделать, чтобы заявки приходили» — один список со ссылками, вместо поиска по странице.
+// Отвечает на жалобу «сложно найти, как подключить каждый сервис».
+function SetupList() {
+  const s = useApp();
+  const i = s.integrations;
+  const done: Record<string, boolean> = {
+    tg: i.tg.status === "ok",
+    wa: i.wa.status === "ok",
+    max: i.max.status === "ok",
+    ig: i.ig.status === "ok",
+    site: i.tilda.status === "ok",
+  };
+  const rows = ["tg", "wa", "max", "ig", "site"];
+  const left = rows.filter(r => !done[r]).length;
+  return (
+    <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px] font-semibold">
+        Что нужно сделать, чтобы заявки приходили
+        <span className="font-mono2 rounded-full px-1.5 py-px text-[9.5px] font-medium"
+          style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>
+          {left ? `осталось ${left} из ${rows.length}` : "все каналы подключены"}
+        </span>
+      </div>
+      <p className={cn("mt-1", SOFT)}>
+        Слева — где взять доступ (ссылка открывает нужную страницу сервиса), справа — куда вставить в CRM.
+      </p>
+      {s.mode !== "cloud" && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-dashed px-2.5 py-2">
+          <span className="min-w-0 flex-1 text-[11.5px] leading-snug text-muted-foreground">
+            <b className="font-medium text-foreground">Сначала войдите в аккаунт</b> — без него приём работает только при открытой вкладке,
+            а Instagram и постоянный приёмник с сайта недоступны совсем.
+          </span>
+          <Button className="h-8 shrink-0 text-[12px]" onClick={() => setAuthStage("auth")}>Войти</Button>
+        </div>
+      )}
+      <div className="mt-2 flex flex-col gap-1">
+        {rows.map(id => {
+          const w = WHERE[id];
+          return (
+            <div key={id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2.5 py-1.5">
+              <span className={cn("grid size-4 shrink-0 place-items-center rounded-full text-[9px]", done[id] ? "" : "border border-dashed")}
+                style={done[id] ? { background: "hsl(var(--brass) / 0.22)", color: "var(--brass-ink)" } : undefined}>
+                {done[id] ? <Check className="size-2.5" /> : ""}
+              </span>
+              <span className="text-[12px] font-medium">{w.name}</span>
+              <span className="hidden text-[10.5px] text-muted-foreground sm:inline">{done[id] ? "подключён" : w.hint}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                <Go href={w.url} dim={done[id]}>{w.go}</Go>
+                <button onClick={() => focusChannel(id)} title="Показать карточку канала ниже"
+                  className="press inline-flex h-8 items-center rounded-md border px-2 text-[12px] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
+                  {done[id] ? "проверить" : "вставить сюда"}
+                </button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // когда в канале была последняя настоящая заявка/сообщение: из диалогов и из серверного журнала
 function LastLead({ src }: { src: InboundSource }) {
@@ -124,7 +209,7 @@ function TgUserCard() {
   const hasAppKeys = !!TG_APP.apiId; // ключи приложения вшиты — пользователю нужен только номер
 
   return (
-    <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
+    <div data-ch="tgu" className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
         <User className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Telegram: личный аккаунт
         <span className="rounded-full px-1.5 py-px text-[9px] font-medium" style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>рабочий номер</span>
@@ -135,8 +220,9 @@ function TgUserCard() {
         <>
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
             Ваш обычный Telegram — вход как в приложении: диалоги рабочего номера появятся во «Входящих», ответы уходят от вашего имени.
-            {!hasAppKeys && <> Один раз возьмите <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools.</>}
+            {!hasAppKeys && <> Один раз возьмите <b>api_id</b> и <b>api_hash</b> — кнопка ниже открывает нужную страницу.</>}
           </p>
+          {!hasAppKeys && <div className="mt-2"><Go href={WHERE.tgu.url}>{WHERE.tgu.go}</Go></div>}
           <p className="mt-1.5 rounded-md border border-dashed px-2.5 py-2 text-[11px] leading-snug" style={{ color: "var(--brass-ink)" }}>
             Сюда приедет <b>вся</b> личная переписка номера, включая ту, что к работе отношения не имеет.
             Она остаётся <b>на этом устройстве</b> и в общее пространство не уходит{s.mode === "cloud" ? "" : ""} — команда её не увидит.
@@ -276,7 +362,7 @@ function NotifyCard() {
   if (s.mode !== "cloud" || s.integrations.tg.status !== "ok" || !bot) return null;
   const link = notifyLink(bot, s.wsId ?? "");
   return (
-    <div className="mt-2 rounded-md border p-3">
+    <div data-ch="notify" className="mt-2 rounded-md border p-3">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
         <Bell className="size-3.5 text-muted-foreground" /> Уведомления о заявках
         <button onClick={refresh} className="press ml-auto text-[11px] font-normal text-muted-foreground hover:text-foreground">обновить</button>
@@ -327,26 +413,35 @@ function IgCard() {
     return () => { live = false; };
   }, [s.mode, s.wsId]);
   return (
-    <div className="mt-2 rounded-md border p-3">
+    <div data-ch="ig" className="mt-2 rounded-md border p-3">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
         <InstaIcon className="size-3.5 text-muted-foreground" /> Instagram Direct
         <Status st={rec ? "ok" : ig.status === "ok" ? "connecting" : ig.status} okText="приёмник работает" />
         <RouteChip src="ig" />
       </div>
       {s.mode !== "cloud" ? (
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
-          Instagram принимает сервер — сообщения становятся заявками даже при закрытом браузере и без VPN
-          (сервер стоит в Европе). Нужно общее пространство: <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в аккаунт</button>.
-        </p>
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+            Instagram принимает сервер — сообщения становятся заявками даже при закрытом браузере и без VPN
+            (сервер стоит в Европе). Нужно общее пространство: <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в аккаунт</button>.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Button className="h-8 text-[12px]" onClick={() => setAuthStage("auth")}>Войти в аккаунт</Button>
+            <Go href={WHERE.ig.url} dim>{WHERE.ig.go}</Go>
+          </div>
+        </>
       ) : !rec ? (
         <>
           <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
             Создам постоянный адрес-приёмник: на него шлют сообщения Meta или сервис-пересыльщик,
             и они становятся заявками с источником Instagram. Без VPN на вашей стороне — принимает сервер.
           </p>
-          <Button className="mt-2 h-9" disabled={busy} onClick={async () => { setBusy(true); const r = await igEnsureReceiver(); setBusy(false); if (r) { setRec(r); toast.success("Приёмник Instagram создан", { description: "Адрес ниже — можно слать сообщения" }); } }}>
-            Создать приёмник Instagram
-          </Button>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Button className="h-9" disabled={busy} onClick={async () => { setBusy(true); const r = await igEnsureReceiver(); setBusy(false); if (r) { setRec(r); toast.success("Приёмник Instagram создан", { description: "Адрес ниже — можно слать сообщения" }); } }}>
+              Создать приёмник Instagram
+            </Button>
+            <Go href={WHERE.ig.url} dim>{WHERE.ig.go}</Go>
+          </div>
         </>
       ) : (
         <>
@@ -372,17 +467,21 @@ function IgCard() {
           <Steps items={[
             <>Приёмник уже принимает: любой сервис-пересыльщик или ваша интеграция шлёт сюда <b>POST JSON</b> вида {"{"}"name","phone","text"{"}"} — заявка появляется сама.</>,
             srvIg ? (
-              <>Прямой приём от Meta: <a className={aCls} href="https://developers.facebook.com" target="_blank" rel="noreferrer">developers.facebook.com</a> → создать приложение → продукт <b>Instagram</b> → Webhooks →
+              <>Прямой приём от Meta — кнопка «{WHERE.ig.go}» ниже: создать приложение → продукт <b>Instagram</b> → Webhooks →
               Callback URL = адрес выше, Verify token = <code className="font-mono2 text-[10.5px]">{rec.secret}</code> → подписка на <b>messages</b>. Настройка Meta делается один раз (в РФ — через VPN); дальше приём идёт без VPN.</>
             ) : (
               <>Прямой приём от Meta (без пересыльщика) включится после ближайшего обновления серверной функции — код уже в проекте, шаги появятся здесь сами. Пока работает путь из шага 1.</>
             ),
             <>Ответы в Instagram пока пишите из самого приложения — в CRM приходит приём; отправку через Meta добавлю следом.</>,
           ]} />
-          <Button variant="outline" className="mt-2 h-8 text-[12px]" onClick={async () => {
-            if (!window.confirm("Выключить приёмник Instagram? Адрес перестанет принимать сообщения.")) return;
-            if (await igDisableReceiver()) setRec(null);
-          }}>Отключить</Button>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Go href={WHERE.ig.url}>{WHERE.ig.go}</Go>
+            <Go href="https://developers.facebook.com/docs/messenger-platform/instagram/get-started" dim>Инструкция Meta</Go>
+            <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+              if (!window.confirm("Выключить приёмник Instagram? Адрес перестанет принимать сообщения.")) return;
+              if (await igDisableReceiver()) setRec(null);
+            }}>Отключить</Button>
+          </div>
         </>
       )}
     </div>
@@ -425,23 +524,26 @@ export function IntegrationsLive() {
         <Plug className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Интеграции: реальные каналы
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-        Подключите канал по шагам — новые сообщения сами станут заявками. У каждой карточки есть «Проверить связь»
-        (работает или нет — и почему) и метка «→ куда падают заявки». Токены хранятся в этом браузере;
+        Подключите канал по шагам — новые сообщения сами станут заявками. В каждой карточке есть кнопка,
+        которая открывает нужную страницу сервиса, «Проверить связь» (работает или нет — и почему) и метка «→ куда падают заявки». Токены хранятся в этом браузере;
         при «Приёме на сервере» токен бота уезжает в общую базу пространства — его увидят участники, зато заявки
         приходят даже при закрытом браузере.
       </p>
 
+      <SetupList />
+
       <TgUserCard />
       <PrivateInCloud />
 
-      <div className="mt-2 rounded-md border p-3">
+      <div data-ch="tg" className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <Send className="size-3.5 text-muted-foreground" /> Telegram-бот <Status st={ints.tg.status} okText={ints.tg.botName ?? "подключено"} />
           <RouteChip src="tg" />
         </div>
+        <div className="mt-2"><Go href={WHERE.tg.url} dim={ints.tg.status === "ok"}>{WHERE.tg.go}</Go></div>
         {ints.tg.status !== "ok" ? (
           <Steps items={[
-            <>В Telegram откройте <a className={aCls} href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> и отправьте команду <b>/newbot</b>.</>,
+            <>Нажмите кнопку выше — откроется <b>@BotFather</b> в Telegram. Отправьте ему команду <b>/newbot</b>.</>,
             <>Назовите бота (например, «Заявки {"{вашей компании}"}») — BotFather пришлёт <b>токен</b>.</>,
             <>Вставьте токен сюда и нажмите «Подключить». Клиенты пишут боту — вы отвечаете из CRM.</>,
           ]} />
@@ -465,14 +567,18 @@ export function IntegrationsLive() {
         )}
       </div>
 
-      <div className="mt-2 rounded-md border p-3">
+      <div data-ch="wa" className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageCircle className="size-3.5 text-muted-foreground" /> WhatsApp <span className="text-[10.5px] font-normal text-muted-foreground">Green API</span> <Status st={ints.wa.status} />
           <RouteChip src="wa" />
         </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Go href={WHERE.wa.url} dim={ints.wa.status === "ok"}>{WHERE.wa.go}</Go>
+          <Go href="https://green-api.com/docs/before-start/" dim>Инструкция Green API</Go>
+        </div>
         {ints.wa.status !== "ok" ? (
           <Steps items={[
-            <>Зарегистрируйтесь на <a className={aCls} href="https://green-api.com" target="_blank" rel="noreferrer">green-api.com</a> и создайте <b>инстанс</b> — бесплатного тарифа для одного номера хватает.</>,
+            <>Кнопка выше открывает кабинет Green API — зарегистрируйтесь и создайте <b>инстанс</b> (бесплатного тарифа для одного номера хватает).</>,
             <>В кабинете инстанса отсканируйте QR рабочим WhatsApp — так же, как входите в WhatsApp Web.</>,
             <>Скопируйте оттуда <b>idInstance</b> и <b>apiTokenInstance</b> в поля ниже → «Подключить». API URL менять не нужно, если кабинет не показывает свой.</>,
           ]} />
@@ -498,15 +604,16 @@ export function IntegrationsLive() {
         )}
       </div>
 
-      <div className="mt-2 rounded-md border p-3">
+      <div data-ch="max" className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageSquare className="size-3.5 text-muted-foreground" /> MAX <span className="text-[10.5px] font-normal text-muted-foreground">Bot API</span> <Status st={ints.max.status} okText={ints.max.botName ?? "подключено"} />
           <RouteChip src="max" />
         </div>
+        <div className="mt-2"><Go href={WHERE.max.url} dim={ints.max.status === "ok"}>{WHERE.max.go}</Go></div>
         {ints.max.status !== "ok" ? (
           <Steps items={[
-            <>В приложении MAX найдите <b>@MasterBot</b> — официальный мастер создания ботов.</>,
-            <>Команда «Создать бота» → назовите его — MasterBot выдаст <b>токен</b>.</>,
+            <>Кнопка выше открывает <b>@MasterBot</b> — официальный мастер создания ботов MAX (в приложении или в вебе).</>,
+            <>Отправьте ему <b>/create</b>, придумайте имя и адрес бота (заканчивается на <b>bot</b>) — MasterBot выдаст <b>токен</b>.</>,
             <>Вставьте токен сюда → «Подключить». Личные аккаунты MAX пока не открывает через API — как откроет, добавлю вход по номеру.</>,
           ]} />
         ) : (
@@ -528,11 +635,15 @@ export function IntegrationsLive() {
 
       <NotifyCard />
 
-      <div className="mt-2 rounded-md border p-3">
+      <div data-ch="site" className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           Сайт: заявки с формы <span className="text-[10.5px] font-normal text-muted-foreground">Tilda и любая другая</span>
           <Status st={ownHook ? "ok" : ints.tilda.status} okText={ownHook ? "приёмник работает" : "мост активен"} />
           <RouteChip src="tilda" />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Go href={WHERE.site.url} dim={!ownHook}>Открыть Тильду · Мои сайты</Go>
+          <Go href="https://help-ru.tilda.cc/forms/webhook" dim>Инструкция Тильды по Webhook</Go>
         </div>
 
         {/* Основной путь — постоянный серверный приёмник: работает всегда, браузер не нужен */}
@@ -571,7 +682,7 @@ export function IntegrationsLive() {
               <LastLead src="tilda" />
             </div>
             <Steps items={[
-              <>Тильда: <b>Настройки сайта → Формы → Webhook</b> → вставьте адрес выше → «Добавить». Потом переопубликуйте сайт.</>,
+              <>Кнопка «Открыть Тильду» выше → ваш сайт → <b>Настройки сайта → Формы → Webhook</b> → вставьте адрес выше → «Добавить». Потом переопубликуйте сайт.</>,
               <>В блоке с формой отметьте новый приёмник Webhook в «Приёме данных».</>,
               <>Нажмите «Прислать тестовую заявку» и убедитесь, что запись появилась в разделе.</>,
             ]} />

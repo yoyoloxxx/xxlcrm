@@ -6,6 +6,7 @@ import { useApp, A, routeOf, resolveRoute, allEntities } from "@/lib/store";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowRight, Route as RouteIcon } from "lucide-react";
+import { focusChannel, channelCard } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
 const NO_STAGE = "__first";
@@ -42,10 +43,19 @@ export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
             <div key={src} data-route={src} className={cn("rounded-md border p-2.5", !r.auto && "bg-muted/30")}>
               <div className="flex items-center gap-2">
                 <span className="text-[12.5px] font-medium">{sourceName(src)}</span>
-                <span className={cn("font-mono2 rounded-full px-1.5 py-px text-[9.5px]", on ? "text-[var(--brass-ink)]" : "text-muted-foreground")}
-                  style={on ? { background: "hsl(var(--brass) / 0.18)" } : { background: "hsl(var(--muted))" }}>
-                  {on ? "подключён" : "не подключён"}
-                </span>
+                {on ? (
+                  <span className="font-mono2 rounded-full px-1.5 py-px text-[9.5px] text-[var(--brass-ink)]" style={{ background: "hsl(var(--brass) / 0.18)" }}>
+                    подключён
+                  </span>
+                ) : (
+                  // не подключён — это не приговор, а кнопка: ведём ровно к карточке этого канала
+                  <button onClick={() => { goSettings?.(); focusChannel(channelCard(src)); }}
+                    title={`Открыть настройку канала «${sourceName(src)}»`}
+                    className="press font-mono2 rounded-full px-1.5 py-px text-[9.5px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                    style={{ background: "hsl(var(--muted))" }}>
+                    не подключён · подключить
+                  </button>
+                )}
                 <label className="ml-auto flex cursor-pointer items-center gap-2 text-[11.5px] text-muted-foreground">
                   {r.auto ? "заявка сразу" : "только диалог"}
                   <Switch checked={r.auto} onCheckedChange={v => A.routeUpdate(src, { auto: v })} />
@@ -96,11 +106,10 @@ export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
         })}
       </div>
 
-      {goSettings && (
-        <button onClick={goSettings} className="press mt-2 text-[11.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
-          Каналы подключаются выше — Интеграции
-        </button>
-      )}
+      <button onClick={() => { goSettings?.(); focusChannel("tg"); }}
+        className="press mt-2 text-[11.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+        Где взять доступ к каналам — список со ссылками в «Интеграциях»
+      </button>
     </div>
   );
 }
