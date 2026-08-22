@@ -170,6 +170,98 @@ export async function tgUsePolling(token: string): Promise<void> {
   toast("Telegram снова читается из браузера", { description: "Работает, только пока открыта вкладка" });
 }
 
+// ---------- Instagram: серверный приёмник ----------
+// Токенов в браузере нет: приёмник живёт в облаке и принимает сообщения от Meta (после
+// обновления функции) и от любого сервиса-пересыльщика уже сейчас — POST JSON {name, phone, text}.
+export async function igEnsureReceiver(): Promise<{ url: string; secret: string } | null> {
+  const ws = getState().wsId;
+  if (!ws) { toast.error("Сначала войдите в общее пространство", { description: "Instagram принимает сервер — нужен аккаунт" }); return null; }
+  const secret = await ensureHookSecret("ig");
+  if (!secret) return null;
+  A.intPatch(i => { i.ig.status = "ok"; i.ig.error = undefined; });
+  return { url: hookUrl(ws, "ig", secret), secret };
+}
+/** Прочитать уже созданный приёмник Instagram, не создавая новый (для показа при открытии настроек) */
+export async function igReceiver(): Promise<{ url: string; secret: string } | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const secret = await getHookSecret("ig");
+  if (!secret) return null;
+  A.intPatch(i => { if (i.ig.status !== "ok") { i.ig.status = "ok"; i.ig.error = undefined; } });
+  return { url: hookUrl(ws, "ig", secret), secret };
+}
+/** Выключить приёмник Instagram: адрес перестаёт принимать совсем */
+export async function igDisableReceiver(): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const { error } = await supa.from("channel_hooks").delete().eq("workspace_id", ws).eq("source", "ig");
+  if (error) { toast.error("Не удалось выключить приёмник", { description: error.message.slice(0, 90) }); return false; }
+  A.intPatch(i => { i.ig = { status: "off" }; });
+  toast("Приёмник Instagram выключен", { description: "Старый адрес больше не принимает" });
+  return true;
+}
+
+// ---------- «Проверить связь»: честная диагностика канала одним нажатием ----------
+// Отвечает на главный вопрос «работает или нет — и почему нет», без чтения документации.
+export async function channelCheck(src: "tg" | "wa" | "max"): Promise<{ ok: boolean; note: string }> {
+  const s = getState();
+  const i = s.integrations;
+  const waApi = (m: string) => `${i.wa.apiUrl.replace(/\/$/, "")}/waInstance${i.wa.idInstance}/${m}/${i.wa.apiToken}`;
+  try {
+    if (src === "tg") {
+      const me = await fetch(`https://api.telegram.org/bot${i.tg.token}/getMe`).then(r => r.json());
+      if (!me?.ok) return { ok: false, note: "токен не работает: " + String(me?.description ?? "нет ответа").slice(0, 80) };
+      if (i.tg.mode === "hook") {
+        const wi = await fetch(`https://api.telegram.org/bot${i.tg.token}/getWebhookInfo`).then(r => r.json());
+        const info = wi?.result ?? {};
+        if (!info.url) return { ok: false, note: "приём на сервере включён, но вебхука в Telegram нет — выключите и включите тумблер" };
+        if (info.last_error_message) return { ok: false, note: `Telegram: ${String(info.last_error_message).slice(0, 90)} · в очереди ${info.pending_update_count ?? 0}` };
+        return { ok: true, note: "бот на связи, сервер принимает" + (info.pending_update_count ? ` · в очереди ${info.pending_update_count}` : "") };
+      }
+      return { ok: true, note: "бот на связи; приём из этой вкладки — браузер должен быть открыт" };
+    }
+    if (src === "wa") {
+      const st = await fetch(waApi("getStateInstance")).then(r => r.json());
+      if (st?.stateInstance !== "authorized") return { ok: false, note: `инстанс «${st?.stateInstance ?? "нет ответа"}» — отсканируйте QR в кабинете Green API` };
+      if (i.wa.mode === "hook") {
+        const secret = s.wsId ? await getHookSecret("wa") : null;
+        const want = s.wsId && secret ? hookUrl(s.wsId, "wa", secret) : "";
+        const set = await fetch(waApi("getSettings")).then(r => r.json());
+        if (want && set?.webhookUrl !== want) return { ok: false, note: "вебхук Green API смотрит не на наш сервер — выключите и включите тумблер" };
+        if (set?.incomingWebhook !== "yes") return { ok: false, note: "в Green API выключены входящие вебхуки — выключите и включите тумблер" };
+        return { ok: true, note: "номер авторизован, сервер принимает" };
+      }
+      return { ok: true, note: "номер авторизован; приём из этой вкладки — браузер должен быть открыт" };
+    }
+    const me = await fetch(`https://botapi.max.ru/me?access_token=${encodeURIComponent(i.max.token)}`);
+    if (!me.ok) return { ok: false, note: `токен не работает (HTTP ${me.status}) — проверьте у @MasterBot` };
+    if (i.max.mode === "hook") {
+      const secret = s.wsId ? await getHookSecret("max") : null;
+      const want = s.wsId && secret ? hookUrl(s.wsId, "max", secret) : "";
+      const subs = await fetch(`https://botapi.max.ru/subscriptions?access_token=${encodeURIComponent(i.max.token)}`).then(r => r.json()).catch(() => null);
+      const list: { url?: string }[] = subs?.subscriptions ?? [];
+      if (want && !list.some(x => x.url === want)) return { ok: false, note: "в MAX нет подписки на наш сервер — выключите и включите тумблер" };
+      return { ok: true, note: "бот на связи, сервер подписан" };
+    }
+    return { ok: true, note: "бот на связи; приём из этой вкладки — браузер должен быть открыт" };
+  } catch (e) {
+    return { ok: false, note: "сеть или сервис недоступны: " + String((e as Error).message ?? e).slice(0, 80) };
+  }
+}
+
+// Автовключение серверного приёма сразу после подключения канала в облаке: минимум усилий —
+// заявки должны идти и при закрытом браузере. Видно (тост от *UseServer) и переключаемо (тумблер).
+export async function autoServerIntake(src: "tg" | "wa" | "max"): Promise<void> {
+  const s = getState();
+  if (s.mode !== "cloud") return;
+  if (s.users.find(u => u.id === s.currentUserId)?.role !== "Владелец") return; // каналы настраивает владелец
+  if (s.integrations[src].mode) return; // человек уже выбирал режим — не переигрываем его выбор
+  if (!(await serverSupports(src))) return;
+  if (src === "tg") await tgUseServer(s.integrations.tg.token);
+  else if (src === "wa") await waUseServer();
+  else await maxUseServer(s.integrations.max.token);
+}
+
 // ---------- разбор журнала входящих ----------
 type Row = { id: string; source: string; ext: Record<string, number | string>; name: string | null; phone: string | null; text: string | null; fields: Record<string, string> | null };
 

@@ -185,7 +185,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.27</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.28</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -343,7 +343,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.27 · база переезжает в облако вместе с вами, код приглашения только у владельца, сотрудника можно убрать</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.28 · каналы подключаются по шагам с проверкой, Instagram принимает через сервер, стадия приёма видна в конструкторе</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -353,7 +353,8 @@ export default function App() {
       {s.authStage && <AuthOverlay stage={s.authStage} />}
       <NewEntityDialog open={newEnt} onOpenChange={setNewEnt} onCreated={id => { setPage("ent:" + id); setSetupEnt(id); }} />
       <PresetPicker open={presets} onOpenChange={o => { setPresets(o); if (!o) setPresetsOnboarding(false); }} hasData={s.records.length > 0} onboarding={presetsOnboarding} onApplied={() => setPage("ent:deals")} />
-      {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)} />}
+      {setupEnt && <ConstructorDialog entityId={setupEnt} open={!!setupEnt} onOpenChange={o => !o && setSetupEnt(null)} onDeleted={() => setSetupEnt(null)}
+        goRouting={() => { setSetupEnt(null); setPage("routing"); }} goChannels={() => { setSetupEnt(null); setPage("settings"); }} />}
       {/* Описание в тосте раньше рисовалось приглушённым и давало контраст 1.49:1 —
           то есть предупреждение «данные живут только до закрытия вкладки» было почти не видно. */}
       <Toaster position="bottom-right" toastOptions={{
@@ -448,8 +449,11 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
             <Plus className="size-3.5" /> {e.name}
           </button>
         </ScreenHead>
-        <div className="mt-1 flex items-center justify-between gap-2 max-md:flex-col max-md:items-stretch">
-          <div className="flex items-center gap-0.5 overflow-x-auto">
+        {/* Вкладки и фильтры ПЕРЕНОСЯТСЯ на новую строку, а не уползают в горизонтальный скролл:
+            на средней ширине от панели фильтров оставался обрезок в пару пикселей — «непонятный
+            ползунок» рядом со вкладками, за которым пряталось всё управление. */}
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2">
+          <div className="flex flex-wrap items-center gap-0.5">
             {tabs.map(([tid, label, Ic]) => (
               <button key={tid} onClick={() => setView(tid)}
                 className={cn("press relative flex items-center gap-1.5 px-2.5 py-2 text-[12.5px] transition-colors duration-150", activeView === tid ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
@@ -458,7 +462,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 pb-1.5">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
               <input value={q} onChange={ev => setQ(ev.target.value)} placeholder="Поиск в разделе…"
@@ -805,14 +809,6 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
           <div className="text-[13px] font-semibold">Скоро</div>
           <div className="mt-2.5 flex flex-col gap-2">
             <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-2.5">
-              <InstaIcon className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <span className="block text-[12.5px] font-medium">Instagram · через провайдера</span>
-                <span className="block text-[11px] leading-snug text-muted-foreground">без VPN нужен провайдер (Wazzup/Umnico) и серверная часть — подключу на шаге Supabase</span>
-              </div>
-              <Idle title="Появится после серверной части (шаг Supabase)">Скоро</Idle>
-            </div>
-            <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-2.5">
               <Sparkles className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <span className="block text-[12.5px] font-medium">AI-ассистент</span>
@@ -832,17 +828,5 @@ function SettingsScreen({ theme, setTheme }: { theme: "light" | "dark"; setTheme
         </div>
       </div>
     </div>
-  );
-}
-
-
-// Instagram-иконка: в этой версии lucide бренд-иконок нет — аккуратный примитив
-function InstaIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn("lucide", className)}>
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" />
-      <circle cx="12" cy="12" r="3.6" />
-      <circle cx="17.2" cy="6.8" r="0.9" fill="currentColor" stroke="none" />
-    </svg>
   );
 }

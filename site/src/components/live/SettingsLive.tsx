@@ -1,9 +1,9 @@
 // Живые секции настроек: интеграции каналов и шаблоны ответов
 import { useEffect, useState } from "react";
-import { plural, type IntStatus } from "@/lib/model";
-import { useApp, A, storageState } from "@/lib/store";
+import { plural, relTime, type InboundSource, type IntStatus } from "@/lib/model";
+import { useApp, A, storageState, routeSummary, setAuthStage } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove, channelCheck, igEnsureReceiver, igReceiver, igDisableReceiver } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user-lazy";
 import { Input } from "@/components/ui/input";
@@ -11,11 +11,89 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cloudPrivateWeight, purgePrivateFromCloud } from "@/lib/cloud";
+import { supa, SUPA_URL } from "@/lib/supa";
+import { InstaIcon } from "./icons";
 
 import { Bell, Copy, MessageCircle, MessageSquare, Pencil, Plug, Plus, RefreshCw, Send, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SOFT = "text-[11.5px] leading-snug text-muted-foreground";
+
+// прокрутить к маршруту канала в блоке «Куда падают заявки» ниже и подсветить его
+function showRoute(src: InboundSource) {
+  const el = document.querySelector(`[data-route="${src}"]`) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.style.boxShadow = "0 0 0 2px hsl(var(--brass))";
+  window.setTimeout(() => { el.style.boxShadow = ""; }, 1600);
+}
+
+// «→ Сделка · Новая»: куда падают заявки из канала; клик ведёт к настройке маршрута
+function RouteChip({ src }: { src: InboundSource }) {
+  useApp();
+  return (
+    <button onClick={() => showRoute(src)} title="Куда падают заявки из этого канала — показать и настроить"
+      className="press ml-auto hidden shrink-0 items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-[10.5px] font-normal text-muted-foreground hover:border-foreground/25 hover:text-foreground sm:inline-flex">
+      → {routeSummary(src)}
+    </button>
+  );
+}
+
+// нумерованные шаги подключения: человек делает 1-2-3 и не читает документацию
+function Steps({ items }: { items: React.ReactNode[] }) {
+  return (
+    <ol className="mt-2 flex flex-col gap-1">
+      {items.map((it, i) => (
+        <li key={i} className="flex gap-2 text-[11.5px] leading-snug text-muted-foreground">
+          <span className="font-mono2 mt-px grid h-4 w-4 shrink-0 place-items-center rounded-full text-[9.5px] font-semibold" style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>{i + 1}</span>
+          <span className="min-w-0">{it}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+const aCls = "underline underline-offset-2 hover:text-foreground";
+
+// когда в канале была последняя настоящая заявка/сообщение: из диалогов и из серверного журнала
+function LastLead({ src }: { src: InboundSource }) {
+  const s = useApp();
+  const [srvTs, setSrvTs] = useState<number>(0);
+  let chTs = 0;
+  for (const c of s.chats) if (c.channel === src && c.ext) for (const m of c.msgs) if (!m.out && m.ts > chTs) chTs = m.ts;
+  useEffect(() => {
+    if (s.mode !== "cloud" || !s.wsId) return;
+    let live = true;
+    void supa.from("inbound").select("ts").eq("workspace_id", s.wsId).eq("source", src)
+      .order("ts", { ascending: false }).limit(1)
+      .then(({ data }) => { if (live && data?.[0]?.ts) setSrvTs(Number(data[0].ts)); });
+    return () => { live = false; };
+  }, [s.mode, s.wsId, src, s.chats.length]);
+  const ts = Math.max(chTs, srvTs);
+  return <span className="font-mono2 text-[10.5px] text-muted-foreground">{ts ? `последняя заявка: ${relTime(ts)}` : "заявок ещё не было"}</span>;
+}
+
+// «Проверить связь»: прогоняет диагностику канала и говорит, работает ли приём и почему нет
+function CheckLine({ src }: { src: "tg" | "wa" | "max" }) {
+  const [note, setNote] = useState<{ ok: boolean; note: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Button variant="outline" className="h-8 gap-1.5 text-[12px]" disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          const r = await channelCheck(src);
+          setBusy(false); setNote(r);
+          if (r.ok) toast.success("Канал работает", { description: r.note });
+          else toast.error("Канал не работает", { description: r.note });
+        }}>
+        <RefreshCw className={cn("size-3.5", busy && "animate-spin")} /> Проверить связь
+      </Button>
+      <LastLead src={src} />
+      {note && <span className={cn("basis-full text-[11px] leading-snug", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.ok ? "✓ " : "✗ "}{note.note}</span>}
+    </div>
+  );
+}
 
 function Status({ st, okText = "подключено" }: { st: IntStatus; okText?: string }) {
   if (st === "off") return null;
@@ -230,6 +308,87 @@ function NotifyCard() {
   );
 }
 
+// Instagram Direct: принимает СЕРВЕР — в браузере ни токенов, ни VPN не нужно.
+// Уже сейчас приёмник ест POST JSON от любого пересыльщика; прямой вебхук Meta включается,
+// когда развёрнутая функция hook умеет источник «ig» (проверяем её версию честно).
+function IgCard() {
+  const s = useApp();
+  const ig = s.integrations.ig;
+  const [rec, setRec] = useState<{ url: string; secret: string } | null>(null);
+  const [srvIg, setSrvIg] = useState<boolean>(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (s.mode !== "cloud" || !s.wsId) { setRec(null); return; }
+    let live = true;
+    void igReceiver().then(r => { if (live) setRec(r); });
+    void fetch(`${SUPA_URL}/functions/v1/hook`).then(r => r.json())
+      .then(d => { if (live) setSrvIg(Array.isArray(d?.sources) && d.sources.includes("ig")); })
+      .catch(() => { /* сети нет — считаем, что рано */ });
+    return () => { live = false; };
+  }, [s.mode, s.wsId]);
+  return (
+    <div className="mt-2 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+        <InstaIcon className="size-3.5 text-muted-foreground" /> Instagram Direct
+        <Status st={rec ? "ok" : ig.status === "ok" ? "connecting" : ig.status} okText="приёмник работает" />
+        <RouteChip src="ig" />
+      </div>
+      {s.mode !== "cloud" ? (
+        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+          Instagram принимает сервер — сообщения становятся заявками даже при закрытом браузере и без VPN
+          (сервер стоит в Европе). Нужно общее пространство: <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в аккаунт</button>.
+        </p>
+      ) : !rec ? (
+        <>
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+            Создам постоянный адрес-приёмник: на него шлют сообщения Meta или сервис-пересыльщик,
+            и они становятся заявками с источником Instagram. Без VPN на вашей стороне — принимает сервер.
+          </p>
+          <Button className="mt-2 h-9" disabled={busy} onClick={async () => { setBusy(true); const r = await igEnsureReceiver(); setBusy(false); if (r) { setRec(r); toast.success("Приёмник Instagram создан", { description: "Адрес ниже — можно слать сообщения" }); } }}>
+            Создать приёмник Instagram
+          </Button>
+        </>
+      ) : (
+        <>
+          <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{rec.url}</code>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="outline" className="h-8 gap-1.5 text-[12px]"
+              onClick={() => navigator.clipboard?.writeText(rec.url).then(() => toast.success("Адрес скопирован"))}>
+              <Copy className="size-3.5" /> Скопировать
+            </Button>
+            <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+              try {
+                const r = await fetch(rec.url, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name: "Проверка Instagram", text: "Тестовое сообщение из настроек CRM — можно удалить" }),
+                });
+                const d = await r.json().catch(() => null);
+                if (r.ok && d?.ok) toast.success("Тест принят сервером", { description: "Заявка с источником Instagram сейчас появится в разделе" });
+                else toast.error("Приёмник ответил ошибкой", { description: String(d?.error ?? "HTTP " + r.status).slice(0, 100) });
+              } catch (e) { toast.error("Не достучался до приёмника", { description: String(e).slice(0, 80) }); }
+            }}>Прислать тест</Button>
+            <LastLead src="ig" />
+          </div>
+          <Steps items={[
+            <>Приёмник уже принимает: любой сервис-пересыльщик или ваша интеграция шлёт сюда <b>POST JSON</b> вида {"{"}"name","phone","text"{"}"} — заявка появляется сама.</>,
+            srvIg ? (
+              <>Прямой приём от Meta: <a className={aCls} href="https://developers.facebook.com" target="_blank" rel="noreferrer">developers.facebook.com</a> → создать приложение → продукт <b>Instagram</b> → Webhooks →
+              Callback URL = адрес выше, Verify token = <code className="font-mono2 text-[10.5px]">{rec.secret}</code> → подписка на <b>messages</b>. Настройка Meta делается один раз (в РФ — через VPN); дальше приём идёт без VPN.</>
+            ) : (
+              <>Прямой приём от Meta (без пересыльщика) включится после ближайшего обновления серверной функции — код уже в проекте, шаги появятся здесь сами. Пока работает путь из шага 1.</>
+            ),
+            <>Ответы в Instagram пока пишите из самого приложения — в CRM приходит приём; отправку через Meta добавлю следом.</>,
+          ]} />
+          <Button variant="outline" className="mt-2 h-8 text-[12px]" onClick={async () => {
+            if (!window.confirm("Выключить приёмник Instagram? Адрес перестанет принимать сообщения.")) return;
+            if (await igDisableReceiver()) setRec(null);
+          }}>Отключить</Button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function IntegrationsLive() {
   const s = useApp();
   const ints = s.integrations;
@@ -266,9 +425,10 @@ export function IntegrationsLive() {
         <Plug className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Интеграции: реальные каналы
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
-        Работают прямо из браузера, токены и сессии хранятся на этом компьютере. Личные аккаунты подключаются по рабочему номеру: Telegram — входом как в приложении, WhatsApp — по QR.
-        {" "}<b className="font-medium text-foreground">Исключение:</b> если включить «Приём на сервере», токен бота уезжает в общую базу пространства —
-        иначе сервер не сможет принимать сообщения при закрытом браузере. Значит, его увидят и другие участники: пускайте в пространство только своих.
+        Подключите канал по шагам — новые сообщения сами станут заявками. У каждой карточки есть «Проверить связь»
+        (работает или нет — и почему) и метка «→ куда падают заявки». Токены хранятся в этом браузере;
+        при «Приёме на сервере» токен бота уезжает в общую базу пространства — его увидят участники, зато заявки
+        приходят даже при закрытом браузере.
       </p>
 
       <TgUserCard />
@@ -277,8 +437,17 @@ export function IntegrationsLive() {
       <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <Send className="size-3.5 text-muted-foreground" /> Telegram-бот <Status st={ints.tg.status} okText={ints.tg.botName ?? "подключено"} />
+          <RouteChip src="tg" />
         </div>
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">@BotFather → /newbot → вставьте токен. Клиенты пишут боту — вы отвечаете отсюда.</p>
+        {ints.tg.status !== "ok" ? (
+          <Steps items={[
+            <>В Telegram откройте <a className={aCls} href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> и отправьте команду <b>/newbot</b>.</>,
+            <>Назовите бота (например, «Заявки {"{вашей компании}"}») — BotFather пришлёт <b>токен</b>.</>,
+            <>Вставьте токен сюда и нажмите «Подключить». Клиенты пишут боту — вы отвечаете из CRM.</>,
+          ]} />
+        ) : (
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Клиенты пишут боту — диалог падает во «Входящие» и по маршруту становится заявкой.</p>
+        )}
         {ints.tg.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tg.error}</p>}
         <div className="mt-2 flex gap-2">
           <Input className="h-9 flex-1 text-[12.5px]" type="password" placeholder="123456789:AA…" value={tgToken} onChange={e => setTgToken(e.target.value)} />
@@ -287,6 +456,7 @@ export function IntegrationsLive() {
         {ints.tg.status === "ok" && (
           <ServerIntake on={ints.tg.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void tgUseServer(ints.tg.token); else void tgUsePolling(ints.tg.token); }} />
         )}
+        {ints.tg.status === "ok" && <CheckLine src="tg" />}
         {ints.tg.status === "ok" && (
           <Button variant="outline" className="mt-2 h-8 text-[12px]"
             onClick={() => { if (ints.tg.mode === "hook") void tgUsePolling(ints.tg.token); A.intPatch(i => { i.tg = { token: "", status: "off" }; }); setTgToken(""); }}>
@@ -298,8 +468,17 @@ export function IntegrationsLive() {
       <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageCircle className="size-3.5 text-muted-foreground" /> WhatsApp <span className="text-[10.5px] font-normal text-muted-foreground">Green API</span> <Status st={ints.wa.status} />
+          <RouteChip src="wa" />
         </div>
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Ваш личный WhatsApp на рабочем номере: green-api.com → инстанс → QR своим WhatsApp (как WhatsApp Web) → idInstance и ApiToken сюда.</p>
+        {ints.wa.status !== "ok" ? (
+          <Steps items={[
+            <>Зарегистрируйтесь на <a className={aCls} href="https://green-api.com" target="_blank" rel="noreferrer">green-api.com</a> и создайте <b>инстанс</b> — бесплатного тарифа для одного номера хватает.</>,
+            <>В кабинете инстанса отсканируйте QR рабочим WhatsApp — так же, как входите в WhatsApp Web.</>,
+            <>Скопируйте оттуда <b>idInstance</b> и <b>apiTokenInstance</b> в поля ниже → «Подключить». API URL менять не нужно, если кабинет не показывает свой.</>,
+          ]} />
+        ) : (
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Ваш WhatsApp на рабочем номере: входящие падают во «Входящие», ответы уходят от вашего имени.</p>
+        )}
         {ints.wa.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.wa.error}</p>}
         <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_110px_1fr_auto]">
           <Input className="h-9 text-[12.5px]" placeholder="API URL" value={waUrl} onChange={e => setWaUrl(e.target.value)} />
@@ -310,13 +489,29 @@ export function IntegrationsLive() {
         {ints.wa.status === "ok" && (
           <ServerIntake on={ints.wa.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void waUseServer(); else void waUsePolling(); }} />
         )}
+        {ints.wa.status === "ok" && <CheckLine src="wa" />}
+        {ints.wa.status === "ok" && (
+          <Button variant="outline" className="mt-2 h-8 text-[12px]"
+            onClick={() => { if (ints.wa.mode === "hook") void waUsePolling(); A.intPatch(i => { i.wa = { apiUrl: "https://api.green-api.com", idInstance: "", apiToken: "", status: "off" }; }); setWaId(""); setWaToken(""); }}>
+            Отключить
+          </Button>
+        )}
       </div>
 
       <div className="mt-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold">
           <MessageSquare className="size-3.5 text-muted-foreground" /> MAX <span className="text-[10.5px] font-normal text-muted-foreground">Bot API</span> <Status st={ints.max.status} okText={ints.max.botName ?? "подключено"} />
+          <RouteChip src="max" />
         </div>
-        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Бот создаётся у мастера ботов MAX (@MasterBot в MAX) → токен сюда. Личные аккаунты MAX пока не открывает через API — как только откроет, добавлю вход по номеру.</p>
+        {ints.max.status !== "ok" ? (
+          <Steps items={[
+            <>В приложении MAX найдите <b>@MasterBot</b> — официальный мастер создания ботов.</>,
+            <>Команда «Создать бота» → назовите его — MasterBot выдаст <b>токен</b>.</>,
+            <>Вставьте токен сюда → «Подключить». Личные аккаунты MAX пока не открывает через API — как откроет, добавлю вход по номеру.</>,
+          ]} />
+        ) : (
+          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Клиенты пишут боту MAX — входящие падают во «Входящие» и становятся заявками.</p>
+        )}
         {ints.max.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.max.error}</p>}
         <div className="mt-2 flex gap-2">
           <Input className="h-9 flex-1 text-[12.5px]" type="password" placeholder="токен бота MAX" value={maxToken} onChange={e => setMaxToken(e.target.value)} />
@@ -326,58 +521,96 @@ export function IntegrationsLive() {
         {ints.max.status === "ok" && (
           <ServerIntake on={ints.max.mode === "hook"} cloud={s.mode === "cloud"} onChange={v => { if (v) void maxUseServer(ints.max.token); else void maxUsePolling(ints.max.token); }} />
         )}
+        {ints.max.status === "ok" && <CheckLine src="max" />}
       </div>
+
+      <IgCard />
 
       <NotifyCard />
 
-      {!!ownHook && (
-        <div className="mt-2 rounded-md border p-3">
-          <div className="text-[12.5px] font-semibold">Ваш серверный приёмник заявок</div>
-          <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">Вставьте в Тильде: Настройки сайта → Формы → Webhook. Работает всегда, браузер не нужен.</p>
-          <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{ownHook}</code>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Button variant="outline" className="h-8 gap-1.5 text-[12px]"
-              onClick={() => navigator.clipboard?.writeText(ownHook).then(() => toast.success("Адрес скопирован"))}>
-              <Copy className="size-3.5" /> Скопировать
-            </Button>
-            <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
-              if (!window.confirm("Перевыпустить секрет? Старый адрес перестанет работать, и его нужно будет заменить в форме на сайте.")) return;
-              const secret = await rotateHookSecret("tilda");
-              if (secret && s.wsId) setOwnHook(hookUrl(s.wsId, "tilda", secret));
-            }}>Перевыпустить секрет</Button>
-            <span className="text-[11px] leading-snug text-muted-foreground">
-              Если адрес куда-то утёк (репозиторий, переписка, скриншот) — перевыпустите: в нём лежит ключ, по которому можно слать заявки в вашу CRM.
-            </span>
-          </div>
-        </div>
-      )}
-
       <div className="mt-2 rounded-md border p-3">
-        <div className="flex items-center gap-2 text-[12.5px] font-semibold">Tilda: заявки с сайта <Status st={ints.tilda.status} okText="мост активен" /></div>
-        {ints.tilda.status !== "ok" ? (
+        <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+          Сайт: заявки с формы <span className="text-[10.5px] font-normal text-muted-foreground">Tilda и любая другая</span>
+          <Status st={ownHook ? "ok" : ints.tilda.status} okText={ownHook ? "приёмник работает" : "мост активен"} />
+          <RouteChip src="tilda" />
+        </div>
+
+        {/* Основной путь — постоянный серверный приёмник: работает всегда, браузер не нужен */}
+        {s.mode === "cloud" && !ownHook && (
           <>
             <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
-              Создам URL-приёмник. Вставьте его в Тильде: Настройки сайта → Формы → Webhook — заявки сами станут сделками.
+              Создам постоянный адрес-приёмник: форма на сайте шлёт на него заявки, и они сами становятся записями — даже когда CRM закрыта.
             </p>
-            {ints.tilda.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tilda.error}</p>}
-            <div className="mt-2 flex flex-wrap gap-2">
-              {s.mode === "cloud" && <Button className="h-9" onClick={() => void makeOwnHook()}>Создать свой URL (сервер)</Button>}
-              <Button variant={s.mode === "cloud" ? "outline" : "default"} className="h-9" disabled={ints.tilda.status === "connecting"} onClick={tildaCreateHook}>
-                Временный мост (только для проверки)
-              </Button>
-              <p className="basis-full text-[11px] leading-snug text-destructive">
-                Временный мост складывает заявки на <b>чужой публичный сервис</b> webhook.site: имя, телефон и текст
-                каждой заявки может прочитать любой, кто знает адрес, и они остаются там навсегда. Он годится
-                проверить, что форма настроена — боевые заявки через него пускать нельзя.
-              </p>
-            </div>
+            <Button className="mt-2 h-9" onClick={() => void makeOwnHook()}>Создать адрес приёмника</Button>
           </>
-        ) : (
-          <div className="mt-2 flex items-center gap-2">
-            <code className="font-mono2 flex-1 truncate rounded-md bg-muted px-2.5 py-2 text-[11.5px]">{tildaHookUrl()}</code>
-            <Button variant="outline" className="h-9 gap-1.5" onClick={() => { navigator.clipboard?.writeText(tildaHookUrl()).then(() => toast("URL скопирован")); }}><Copy className="size-3.5" /></Button>
-            <Button variant="outline" className="h-9" onClick={() => A.intPatch(i => { i.tilda = { hookId: "", status: "off", seen: [] }; })}>Откл.</Button>
-          </div>
+        )}
+        {!!ownHook && (
+          <>
+            <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{ownHook}</code>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button variant="outline" className="h-8 gap-1.5 text-[12px]"
+                onClick={() => navigator.clipboard?.writeText(ownHook).then(() => toast.success("Адрес скопирован"))}>
+                <Copy className="size-3.5" /> Скопировать
+              </Button>
+              <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+                try {
+                  const r = await fetch(ownHook, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: "Проверка приёмника", phone: "+7 000 000-00-00", comment: "Тестовая заявка из настроек CRM — можно удалить" }),
+                  });
+                  const d = await r.json().catch(() => null);
+                  if (r.ok && d?.ok) toast.success("Тестовая заявка отправлена и принята", { description: "Сейчас появится в разделе — по маршруту «Сайт (форма Tilda)»" });
+                  else toast.error("Приёмник ответил ошибкой", { description: String(d?.error ?? "HTTP " + r.status).slice(0, 100) });
+                } catch (e) { toast.error("Не достучался до приёмника", { description: String(e).slice(0, 80) }); }
+              }}>Прислать тестовую заявку</Button>
+              <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+                if (!window.confirm("Перевыпустить секрет? Старый адрес перестанет работать, и его нужно будет заменить в форме на сайте.")) return;
+                const secret = await rotateHookSecret("tilda");
+                if (secret && s.wsId) setOwnHook(hookUrl(s.wsId, "tilda", secret));
+              }}>Перевыпустить секрет</Button>
+              <LastLead src="tilda" />
+            </div>
+            <Steps items={[
+              <>Тильда: <b>Настройки сайта → Формы → Webhook</b> → вставьте адрес выше → «Добавить». Потом переопубликуйте сайт.</>,
+              <>В блоке с формой отметьте новый приёмник Webhook в «Приёме данных».</>,
+              <>Нажмите «Прислать тестовую заявку» и убедитесь, что запись появилась в разделе.</>,
+            ]} />
+            <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+              Не Тильда? Любой сайт может слать POST (JSON или form-data) на этот адрес — поля name/phone/comment разложатся сами.
+              Если адрес утёк (репозиторий, переписка, скриншот) — перевыпустите секрет: по нему можно слать заявки в вашу CRM.
+            </p>
+          </>
+        )}
+
+        {/* Запасной путь без аккаунта: временный мост, честно помеченный как небезопасный */}
+        {!ownHook && (
+          <>
+            {s.mode !== "cloud" && (
+              <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+                Постоянный приём с сайта работает через сервер — <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в общее пространство</button>.
+                Пока без входа есть только временный мост для проверки формы.
+              </p>
+            )}
+            {ints.tilda.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tilda.error}</p>}
+            {ints.tilda.status !== "ok" ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button variant="outline" className="h-9" disabled={ints.tilda.status === "connecting"} onClick={tildaCreateHook}>
+                  Временный мост (только для проверки)
+                </Button>
+                <p className="basis-full text-[11px] leading-snug text-destructive">
+                  Временный мост складывает заявки на <b>чужой публичный сервис</b> webhook.site: имя, телефон и текст
+                  каждой заявки может прочитать любой, кто знает адрес, и они остаются там навсегда. Он годится
+                  проверить, что форма настроена — боевые заявки через него пускать нельзя.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center gap-2">
+                <code className="font-mono2 flex-1 truncate rounded-md bg-muted px-2.5 py-2 text-[11.5px]">{tildaHookUrl()}</code>
+                <Button variant="outline" className="h-9 gap-1.5" onClick={() => { navigator.clipboard?.writeText(tildaHookUrl()).then(() => toast("URL скопирован")); }}><Copy className="size-3.5" /></Button>
+                <Button variant="outline" className="h-9" onClick={() => A.intPatch(i => { i.tilda = { hookId: "", status: "off", seen: [] }; })}>Откл.</Button>
+              </div>
+            )}
+          </>
         )}
       </div>
 

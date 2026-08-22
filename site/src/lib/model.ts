@@ -32,8 +32,8 @@ export interface Chat {
   // а пространство видит вся команда. В CRM диалог попадает только по явной кнопке.
   shared?: boolean;
 }
-// tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот
-export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string }
+// tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот, ig — Instagram (id собеседника из Meta)
+export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string; ig?: string }
 export interface ReplyTemplate { id: string; name: string; text: string }
 
 export type IntStatus = "off" | "connecting" | "ok" | "error";
@@ -44,6 +44,8 @@ export interface Integrations {
   wa: { apiUrl: string; idInstance: string; apiToken: string; status: IntStatus; error?: string; mode?: "poll" | "hook" };
   max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string; mode?: "poll" | "hook" };
   tilda: { hookId: string; status: IntStatus; seen: string[]; error?: string };
+  // Instagram принимает СЕРВЕР (приёмник в облаке): в браузере токенов нет, статус = «приёмник создан»
+  ig: { status: IntStatus; error?: string };
   autoLead: boolean;
 }
 export const defaultIntegrations = (): Integrations => ({
@@ -52,6 +54,7 @@ export const defaultIntegrations = (): Integrations => ({
   wa: { apiUrl: "https://api.green-api.com", idInstance: "", apiToken: "", status: "off" },
   max: { token: "", status: "off" },
   tilda: { hookId: "", status: "off", seen: [] },
+  ig: { status: "off" },
   autoLead: true,
 });
 export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : "Instagram");

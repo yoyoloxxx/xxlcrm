@@ -2,6 +2,7 @@
 // Токены хранятся только в localStorage этого браузера. Все ошибки — мягкие: тост + статус, тик продолжается.
 import { getState, A, handleIncoming } from "./store";
 import { tguInit, tguSend } from "./tg-user-lazy";
+import { autoServerIntake } from "./inbound";
 import { toast } from "sonner";
 
 const ints = () => getState().integrations;
@@ -17,6 +18,7 @@ export async function tgConnect(token: string): Promise<void> {
     if (!data.ok) throw new Error(data.description ?? "неверный токен");
     A.intPatch(i => { i.tg.status = "ok"; i.tg.botName = "@" + data.result.username; i.tg.offset = undefined; });
     toast.success(`Telegram подключён: @${data.result.username}`, { description: "Напишите боту с телефона — диалог появится во «Входящих»" });
+    void autoServerIntake("tg"); // в облаке сразу переводим приём на сервер — заявки идут и при закрытом браузере
   } catch (err) {
     A.intPatch(i => { i.tg.status = "error"; i.tg.error = String((err as Error).message).slice(0, 120); });
     toast.error("Telegram: " + String((err as Error).message).slice(0, 120));
@@ -76,6 +78,7 @@ export async function waConnect(apiUrl: string, idInstance: string, apiToken: st
     if (data.stateInstance !== "authorized") throw new Error(`инстанс «${data.stateInstance}» — отсканируйте QR в кабинете Green API`);
     A.intPatch(i => { i.wa.status = "ok"; });
     toast.success("WhatsApp подключён (Green API)");
+    void autoServerIntake("wa");
   } catch (err) {
     A.intPatch(i => { i.wa.status = "error"; i.wa.error = String((err as Error).message).slice(0, 140); });
     toast.error("WhatsApp: " + String((err as Error).message).slice(0, 140));
@@ -132,6 +135,7 @@ export async function maxConnect(token: string): Promise<void> {
     const data = await res.json();
     A.intPatch(i => { i.max.status = "ok"; i.max.botName = data?.name ?? data?.username ?? "бот MAX"; i.max.marker = undefined; });
     toast.success(`MAX подключён: ${data?.name ?? "бот"}`);
+    void autoServerIntake("max");
   } catch (err) {
     A.intPatch(i => { i.max.status = "error"; i.max.error = String((err as Error).message).slice(0, 140); });
     toast.error("MAX: " + String((err as Error).message).slice(0, 140));
@@ -226,6 +230,12 @@ export const tildaHookUrl = () => (ints().tilda.hookId ? `https://webhook.site/$
 export async function sendChatMessage(chatId: string, text: string) {
   const chat = getState().chats.find(c => c.id === chatId);
   if (!chat) return;
+  // Instagram: Meta не даёт отвечать без своего серверного токена — честно говорим, а не рисуем
+  // «отправленный» пузырь, который никуда не ушёл
+  if (chat.channel === "ig" && chat.ext?.ig !== undefined) {
+    toast.error("В Instagram пока только приём", { description: "Ответьте из приложения Instagram — ответка появится здесь позже, вместе с отправкой через Meta" });
+    return;
+  }
   const msgId = A.chatSend(chatId, text);
   // Пузырь появляется сразу — так и надо. Но если канал не доставил, помечаем сообщение
   // как неотправленное: раньше оно навсегда оставалось в переписке как будто ушло,

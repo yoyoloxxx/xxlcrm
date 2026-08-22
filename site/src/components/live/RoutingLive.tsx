@@ -17,7 +17,7 @@ function connected(s: ReturnType<typeof useApp>, src: InboundSource): boolean {
   if (src === "wa") return i.wa.status === "ok";
   if (src === "max") return i.max.status === "ok";
   if (src === "tilda") return i.tilda.status === "ok";
-  return false; // Instagram — только через провайдера, пока не подключается напрямую
+  return i.ig.status === "ok"; // Instagram: создан серверный приёмник
 }
 
 export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
@@ -44,7 +44,7 @@ export function RoutingLive({ goSettings }: { goSettings?: () => void }) {
                 <span className="text-[12.5px] font-medium">{sourceName(src)}</span>
                 <span className={cn("font-mono2 rounded-full px-1.5 py-px text-[9.5px]", on ? "text-[var(--brass-ink)]" : "text-muted-foreground")}
                   style={on ? { background: "hsl(var(--brass) / 0.18)" } : { background: "hsl(var(--muted))" }}>
-                  {on ? "подключён" : src === "ig" ? "нужен провайдер" : "не подключён"}
+                  {on ? "подключён" : "не подключён"}
                 </span>
                 <label className="ml-auto flex cursor-pointer items-center gap-2 text-[11.5px] text-muted-foreground">
                   {r.auto ? "заявка сразу" : "только диалог"}

@@ -11,20 +11,37 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, GripVertical, Plus, Route as RouteIcon, Trash2 } from "lucide-react";
 import { EntIcon, ICON_NAMES } from "./icons";
 import { cn } from "@/lib/utils";
+import type { InboundSource } from "@/lib/model";
 
-// Что сломается, если тронуть раздел: маршруты приёма и правила автоматизаций смотрят сюда по id
+// подключён ли источник (короткие суффиксы — для бейджей на стадиях)
+function srcOn(s: ReturnType<typeof useApp>, src: InboundSource): boolean {
+  const i = s.integrations;
+  if (src === "tg") return i.tg.status === "ok" || i.tgUser.status === "ok";
+  if (src === "wa") return i.wa.status === "ok";
+  if (src === "max") return i.max.status === "ok";
+  if (src === "tilda") return i.tilda.status === "ok";
+  return i.ig.status === "ok";
+}
+const srcShort = (s: InboundSource) => (s === "tg" ? "TG" : s === "wa" ? "WA" : s === "max" ? "MAX" : s === "ig" ? "IG" : "Сайт");
+
+// Что сломается, если тронуть раздел: маршруты приёма и правила автоматизаций смотрят сюда по id.
+// Заодно СРАЗУ отвечаем «куда приходят заявки»: в какую стадию падают новые — и где это меняется.
 function Dependencies({ entityId }: { entityId: string }) {
   const s = useApp();
   const routes = SOURCES.filter(src => resolveRoute(src).entity?.id === entityId && routeOf(src).auto);
   const rules = s.automations.filter(r => r.trigger.entityId === entityId);
   if (!routes.length && !rules.length) return null;
+  const stageNames = [...new Set(routes.map(src => resolveRoute(src).stage?.label).filter(Boolean))] as string[];
   return (
     <div className="mx-5 mb-1 mt-3 rounded-md border border-dashed px-3 py-2 text-[11.5px] leading-snug text-muted-foreground">
       <b className="font-medium text-foreground">Сюда завязано:</b>{" "}
-      {routes.length > 0 && <>приём заявок из {routes.map(r => sourceName(r)).join(", ")}</>}
+      {routes.length > 0 && (
+        <>приём заявок из {routes.map(r => sourceName(r)).join(", ")}
+        {stageNames.length > 0 && <> — падают в {stageNames.length === 1 ? <>стадию <b className="font-medium text-foreground">«{stageNames[0]}»</b></> : `стадии «${stageNames.join("», «")}»`} (настройка — во вкладке «Стадии»)</>}</>
+      )}
       {routes.length > 0 && rules.length > 0 && " · "}
       {rules.length > 0 && <>{rules.length} {plural(rules.length, "правило", "правила", "правил")} автоматизаций</>}
       . Переименование безопасно; удаление стадии или раздела — подстрою и скажу что изменилось.
@@ -32,8 +49,67 @@ function Dependencies({ entityId }: { entityId: string }) {
   );
 }
 
-export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
+// «Куда приходят заявки» — прямо во вкладке «Стадии»: из какого канала в какую стадию,
+// со сменой стадии на месте. Раздел/ответственный/«заявка сразу» — в «Приёме заявок».
+const FIRST_STAGE = "__first";
+function IntakePanel({ entityId, goRouting, goChannels }: { entityId: string; goRouting?: () => void; goChannels?: () => void }) {
+  const s = useApp();
+  const e = allEntities().find(x => x.id === entityId);
+  if (!e?.stages?.length) return null;
+  const here = SOURCES.filter(src => resolveRoute(src).entity?.id === entityId && routeOf(src).auto);
+  const off = here.filter(src => !srcOn(s, src));
+  if (!here.length) {
+    const other = SOURCES.map(src => resolveRoute(src)).find(r => r.route.auto && r.entity);
+    return (
+      <div className="mt-4 rounded-lg border border-dashed px-3 py-2.5 text-[11.5px] leading-snug text-muted-foreground">
+        Заявки из каналов в этот раздел не падают{other?.entity ? <> — они идут в «{other.entity.namePlural}»</> : null}.
+        {goRouting && <> Поменять — в <button onClick={goRouting} className="press underline underline-offset-2 hover:text-foreground">Приёме заявок</button>.</>}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 rounded-lg border p-3" data-intake>
+      <div className="flex items-center gap-1.5 text-[12.5px] font-semibold">
+        <RouteIcon className="size-3.5" style={{ color: "var(--brass-ink)" }} /> Куда приходят заявки
+      </div>
+      <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+        Новое сообщение в канале или заявка с сайта сами становятся записью — вот в какой стадии она появится:
+      </p>
+      <div className="mt-2 flex flex-col gap-1">
+        {here.map(src => {
+          const r = routeOf(src);
+          const on = srcOn(s, src);
+          return (
+            <div key={src} className="flex items-center gap-2" data-intake-src={src}>
+              <span className="size-1.5 shrink-0 rounded-full" style={{ background: on ? "hsl(var(--brass))" : "hsl(var(--muted-foreground) / 0.35)" }} />
+              <span className="min-w-0 flex-1 truncate text-[12px]">{sourceName(src)}
+                <span className="ml-1.5 text-[10px] text-muted-foreground">{on ? "подключён" : "не подключён"}</span>
+              </span>
+              <ArrowRight className="size-3 shrink-0 text-muted-foreground" />
+              <Select value={r.stageId ?? FIRST_STAGE} onValueChange={v => A.routeUpdate(src, { stageId: v === FIRST_STAGE ? undefined : v })}>
+                <SelectTrigger aria-label={`${sourceName(src)}: в какую стадию`} className="h-7 w-[150px] shrink-0 text-[11.5px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={FIRST_STAGE}>Первая — {e.stages![0].label}</SelectItem>
+                  {e.stages!.map(x => <SelectItem key={x.id} value={x.id}>{x.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+        {off.length > 0 && goChannels && (
+          <>{off.map(sourceName).join(", ")} {plural(off.length, "ещё не подключён", "ещё не подключены", "ещё не подключены")} — <button onClick={goChannels} className="press underline underline-offset-2 hover:text-foreground">подключить в Настройках</button>. </>
+        )}
+        {goRouting && <>Раздел, ответственный и «заявка сразу или только диалог» — в <button onClick={goRouting} className="press underline underline-offset-2 hover:text-foreground">Приёме заявок</button>.</>}
+      </p>
+    </div>
+  );
+}
+
+export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted, goRouting, goChannels }: {
   entityId: string; open: boolean; onOpenChange: (o: boolean) => void; onDeleted: () => void;
+  goRouting?: () => void; goChannels?: () => void;
 }) {
   useApp();
   const e = allEntities().find(x => x.id === entityId);
@@ -89,6 +165,17 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                         dragStage === stg.id && "opacity-40",
                         overStage === i && dragStage && dragStage !== stg.id && "ring-1 ring-[hsl(var(--brass)/0.7)]")}>
                       <span className="cursor-grab text-muted-foreground/50 active:cursor-grabbing" title="Перетащить, чтобы поменять порядок" aria-hidden><GripVertical className="size-3.5" /></span>
+                      {(() => {
+                        // сюда падают новые заявки — бейдж отвечает «куда придёт» прямо у стадии
+                        const intake = SOURCES.filter(src => { const rr = resolveRoute(src); return routeOf(src).auto && rr.entity?.id === e.id && rr.stage?.id === stg.id; });
+                        return intake.length ? (
+                          <span title={`Сюда падают новые заявки: ${intake.map(sourceName).join(", ")}`}
+                            className="order-last mr-1 shrink-0 cursor-default rounded-full px-1.5 py-px text-[9px] font-medium"
+                            style={{ background: "hsl(var(--brass) / 0.18)", color: "var(--brass-ink)" }}>
+                            ← {intake.length > 2 ? `заявки · ${intake.length} кан.` : "заявки: " + intake.map(srcShort).join(" ")}
+                          </span>
+                        ) : null;
+                      })()}
                       <Popover>
                         <PopoverTrigger asChild>
                           <button aria-label={`Цвет стадии «${stg.label}»`} className="h-5 w-5 shrink-0 rounded-[5px] border" style={{ background: stg.color }} title="Цвет стадии" />
@@ -118,6 +205,7 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted }: {
                   ))}
                 </div>
                 <AddStageRow entityId={e.id} />
+                <IntakePanel entityId={e.id} goRouting={goRouting} goChannels={goChannels} />
                 <p className="mt-3 text-[11.5px] leading-snug text-muted-foreground">
                   Смена стадии пишется в хронологию записи. «Успех» и «Провал» — финальные стадии: по ним считается конверсия.
                 </p>

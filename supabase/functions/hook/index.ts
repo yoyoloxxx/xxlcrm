@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.20"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.21"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -47,6 +47,20 @@ function parseWhatsApp(body: Any): Msg | null {
   if (!text || !chatId) return null;
   const phone = "+" + String(chatId).replace(/@.*$/, "");
   return { ext: { wa: chatId }, name: body.senderData?.senderName || phone, phone, text };
+}
+
+// Instagram: вебхук Meta (Messenger Platform). Эхо своих же исходящих пропускаем.
+function parseInstagram(body: Any): Msg | null {
+  if (body?.object !== "instagram" && body?.object !== "page") return null;
+  for (const entry of body?.entry ?? []) {
+    for (const ev of entry?.messaging ?? []) {
+      if (ev?.message?.is_echo) continue;
+      const text: string | undefined = ev?.message?.text;
+      const sid = ev?.sender?.id;
+      if (text && sid) return { ext: { ig: String(sid) }, name: "Instagram · " + String(sid).slice(-6), text };
+    }
+  }
+  return null;
 }
 
 // MAX Bot API — зеркально Telegram
@@ -191,6 +205,10 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   let existing: Any | null = null;  // уже существующий: только допишем сообщение
   if (src !== "tilda") {
     const extKey = Object.keys(msg.ext)[0];
+    // Пересыльщик без id собеседника (голый JSON) — диалог не заводим, только заявка:
+    // иначе все такие сообщения склеивались бы в один общий «диалог ни с кем».
+    if (extKey === undefined) { existing = null; chat = null; }
+    else {
     const extVal = msg.ext[extKey];
     const { data: chats } = await db.from("chats").select("*").eq("workspace_id", ws).eq("channel", src);
     existing = (chats ?? []).find((c: Any) => c.ext && String(c.ext[extKey]) === String(extVal)) ?? null;
@@ -213,6 +231,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
         id: chatIdFor(ws, src, String(extVal)), workspace_id: ws, name: clean(msg.name || msg.phone || "Клиент", 120), phone: msg.phone ?? null,
         channel: src, record_id: null, unread: 1, ext: msg.ext, msgs: [message], updated_at: nowMs,
       };
+    }
     }
   }
 
@@ -346,7 +365,7 @@ function sourceOption(e: Any, src: string): { fieldId: string; optionId: string 
   return o ? { fieldId: f.id, optionId: o.id } : undefined;
 }
 
-const srcName = (s: string) => (s === "tg" ? "Telegram" : s === "wa" ? "WhatsApp" : s === "max" ? "MAX" : s === "tilda" ? "сайт" : s);
+const srcName = (s: string) => (s === "tg" ? "Telegram" : s === "wa" ? "WhatsApp" : s === "max" ? "MAX" : s === "tilda" ? "сайт" : s === "ig" ? "Instagram" : s);
 
 // ---------- точка входа ----------
 Deno.serve(async (req: Request) => {
@@ -354,11 +373,19 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const ws = url.searchParams.get("ws") ?? "";
   // проба: «какая версия функции стоит и какие источники понимает»
-  if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda"] });
+  if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda", "ig"] });
   const src = url.searchParams.get("src") ?? "tg";
   const key = req.headers.get("x-telegram-bot-api-secret-token") ?? url.searchParams.get("k") ?? "";
 
   const { data: hook } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", src).maybeSingle();
+  // Проверка вебхука Meta (Instagram): GET с hub.challenge, надо вернуть challenge голым текстом.
+  // Verify token человек вводит в Meta тот же, что и секрет приёмника — сверяем и его.
+  if (req.method === "GET" && url.searchParams.get("hub.mode") === "subscribe") {
+    const challenge = url.searchParams.get("hub.challenge") ?? "";
+    const vt = url.searchParams.get("hub.verify_token") ?? "";
+    if (!hook?.secret || (vt !== hook.secret && key !== hook.secret)) return json({ ok: false, error: "bad verify token" }, 401);
+    return new Response(challenge, { status: 200, headers: { "content-type": "text/plain", ...CORS } });
+  }
   if (!hook?.secret || hook.secret !== key) return json({ ok: false, error: "bad key" }, 401);
 
   const payload = await readPayload(req);
@@ -374,6 +401,7 @@ Deno.serve(async (req: Request) => {
   const msg = src === "tg" ? parseTelegram(payload)
     : src === "wa" ? parseWhatsApp(payload)
     : src === "max" ? parseMax(payload)
+    : src === "ig" ? (parseInstagram(payload) ?? parseForm(payload)) // Meta-вебхук либо пересыльщик с JSON {name, phone, text}
     : parseForm(payload);
   if (!msg || (!msg.text && !msg.name)) return json({ ok: true, skipped: true });
 

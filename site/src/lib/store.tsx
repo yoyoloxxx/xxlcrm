@@ -97,6 +97,8 @@ const persistence = {
       ints.wa.status = ints.wa.idInstance && ints.wa.apiToken ? "ok" : "off";
       ints.max.status = ints.max.token ? "ok" : "off";
       ints.tilda.status = ints.tilda.hookId ? "ok" : "off";
+      // Instagram-приёмник живёт на сервере: «ок» переживает перезагрузку, ошибки — нет
+      ints.ig = { status: ints.ig?.status === "ok" ? "ok" : "off" };
       // личный Telegram: сессия есть → подключимся в фоне при старте
       ints.tgUser.status = ints.tgUser.session ? "connecting" : "off";
       ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
@@ -1502,7 +1504,8 @@ export function sourceOption(e: EntityCfg, source: InboundSource): { fieldId: st
 // совпадение внешних id двух диалогов (каналы не смешиваются)
 function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
   return (b.tg !== undefined && a.tg === b.tg) || (b.wa !== undefined && a.wa === b.wa)
-    || (b.max !== undefined && a.max === b.max) || (b.tgu !== undefined && a.tgu === b.tgu);
+    || (b.max !== undefined && a.max === b.max) || (b.tgu !== undefined && a.tgu === b.tgu)
+    || (b.ig !== undefined && a.ig === b.ig);
 }
 
 // общий приём входящего из ЛЮБОГО реального канала: найти диалог по внешнему id либо создать (+автолид)
