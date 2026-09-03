@@ -219,6 +219,10 @@ export function TeamLive() {
         <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground" onClick={() => void signOutCloud()}>
           <LogOut className="size-3.5" /> Выйти из аккаунта
         </Button>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground" title="Общий компьютер: выйти и стереть здесь ключи каналов и личную переписку Telegram"
+          onClick={() => { if (window.confirm("Выйти и стереть на этом устройстве ключи каналов (бот, WhatsApp, MAX) и сессию личного Telegram? В облаке всё останется.")) void signOutCloud(true); }}>
+          Выйти и стереть на этом устройстве
+        </Button>
         {owner && <DropWs />}
       </div>
     </div>

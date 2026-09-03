@@ -1,9 +1,9 @@
-// Конструктор разделов: основное (имя/иконка/воронка/удаление), поля (12 типов), стадии.
+// Конструктор разделов: основное (имя/иконка/воронка/удаление), поля (14 типов), стадии.
 // «Пульт мира»: пользователь собирает структуру CRM сам, всё меняется вживую и синхронизируется команде.
 import { useState } from "react";
 import type { Field, FieldType } from "@/lib/model";
 import { FIELD_TYPES, PALETTE, SOURCES, sourceName, plural, uid } from "@/lib/model";
-import { useApp, A, allEntities, recordsOf, resolveRoute, routeOf } from "@/lib/store";
+import { useApp, A, allEntities, recordsOf, resolveRoute, routeOf, pluralGuess } from "@/lib/store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -178,11 +178,11 @@ export function ConstructorDialog({ entityId, open, onOpenChange, onDeleted, goR
                       })()}
                       <Popover>
                         <PopoverTrigger asChild>
-                          <button aria-label={`Цвет стадии «${stg.label}»`} className="h-5 w-5 shrink-0 rounded-[5px] border" style={{ background: stg.color }} title="Цвет стадии" />
+                          <button aria-label={`Цвет стадии «${stg.label}»`} className="swatch h-5 w-5 shrink-0 rounded-[5px] border" style={{ background: stg.color }} title="Цвет стадии" />
                         </PopoverTrigger>
                         <PopoverContent className="w-fit p-2">
                           <div className="grid grid-cols-5 gap-1.5">
-                            {PALETTE.map(c => <button key={c} aria-label={`Цвет ${c}`} className="h-6 w-6 rounded-[5px]" style={{ background: c }} onClick={() => A.stageUpdate(e.id, stg.id, { color: c })} />)}
+                            {PALETTE.map(c => <button key={c} aria-label={`Цвет ${c}`} className="swatch h-6 w-6 rounded-[5px]" style={{ background: c }} onClick={() => A.stageUpdate(e.id, stg.id, { color: c })} />)}
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -316,6 +316,8 @@ function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, ove
 }) {
   const typeLabel = FIELD_TYPES.find(t => t.type === f.type)?.label ?? f.type;
   const relName = f.type === "relation" ? allEntities().find(e => e.id === f.relationTo)?.namePlural : null;
+  // На узком экране строка переносится: название — первой строкой, управление — второй.
+  // Раньше стрелки и удаление уезжали за правый край и до них было не дотянуться.
   return (
     <div
       draggable
@@ -323,11 +325,12 @@ function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, ove
       onDragEnd={() => { setDrag(null); setOver(null); }}
       onDragOver={ev => { if (!drag) return; ev.preventDefault(); setOver(index); }}
       onDrop={ev => { ev.preventDefault(); if (drag) A.fieldMoveTo(entityId, drag, index); setDrag(null); setOver(null); }}
-      className={cn("flex items-center gap-2 rounded-md border bg-background px-2 py-1.5",
+      className={cn("flex flex-wrap items-center gap-2 rounded-md border bg-background px-2 py-1.5 sm:flex-nowrap",
         drag === f.id && "opacity-40", over === index && drag && drag !== f.id && "ring-1 ring-[hsl(var(--brass)/0.7)]")}>
       <span className="cursor-grab text-muted-foreground/50 active:cursor-grabbing" title="Перетащить, чтобы поменять порядок" aria-hidden><GripVertical className="size-3.5" /></span>
       <Input value={f.label} onChange={ev => A.fieldUpdate(entityId, f.id, { label: ev.target.value })}
-        className="h-8 flex-1 border-transparent bg-transparent px-1.5 text-[13px] font-medium focus-visible:border-input" />
+        className="h-8 min-w-[140px] flex-1 border-transparent bg-transparent px-1.5 text-[13px] font-medium focus-visible:border-input sm:min-w-0" />
+      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:shrink-0 sm:flex-nowrap">
       {f.type === "relation" ? (
         <span className="w-[126px] shrink-0 truncate text-[11px] text-muted-foreground">{typeLabel}{relName ? ` → ${relName}` : ""}</span>
       ) : (
@@ -340,12 +343,12 @@ function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, ove
           </SelectContent>
         </Select>
       )}
-      {f.type === "select" && <OptionsEditor entityId={entityId} f={f} />}
+      {(f.type === "select" || f.type === "multiselect") && <OptionsEditor entityId={entityId} f={f} />}
       <button
         title={f.required ? "Обязательное — напомню, если не заполнено" : "Сделать обязательным"}
         aria-pressed={!!f.required}
         onClick={() => A.fieldUpdate(entityId, f.id, { required: !f.required })}
-        className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.required ? "font-medium" : "text-muted-foreground/60")}
+        className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.required ? "border-transparent font-medium" : "border-foreground/20 text-muted-foreground")}
         style={f.required ? { background: "hsl(var(--brass) / 0.14)", color: "var(--brass-ink)" } : undefined}>
         обязательное
       </button>
@@ -353,7 +356,7 @@ function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, ove
         title={f.inTable === false ? "Показать колонку в таблице" : "Скрыть колонку из таблицы"}
         aria-pressed={f.inTable !== false}
         onClick={() => A.fieldUpdate(entityId, f.id, { inTable: f.inTable === false ? true : false })}
-        className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.inTable === false ? "text-muted-foreground/60" : "font-medium")}
+        className={cn("press shrink-0 rounded-md border px-1.5 py-0.5 text-[10px]", f.inTable === false ? "border-foreground/20 text-muted-foreground" : "border-transparent font-medium")}
         style={f.inTable !== false ? { background: "hsl(var(--brass) / 0.14)", color: "var(--brass-ink)" } : undefined}>
         таблица
       </button>
@@ -366,6 +369,7 @@ function FieldRow({ entityId, f, index, isTitle, first, last, drag, setDrag, ove
           <DeleteField entityId={entityId} f={f} />
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -379,10 +383,10 @@ function OptionsEditor({ entityId, f }: { entityId: string; f: Field }) {
         <button className="press shrink-0 rounded-md border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted">{opts.length} вар.</button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-2" align="end">
-        <div className="px-1 pb-1 text-[11.5px] font-medium text-muted-foreground">Варианты списка</div>
+        <div className="px-1 pb-1 text-[11.5px] font-medium text-muted-foreground">{f.type === "multiselect" ? "Варианты (можно выбрать несколько)" : "Варианты списка"}</div>
         {opts.map(o => (
           <div key={o.id} className="flex items-center gap-2 rounded px-1 py-1">
-            <button className="h-4 w-4 shrink-0 rounded-[4px]" style={{ background: o.color }} title="Сменить цвет"
+            <button aria-label={`Цвет варианта «${o.label}»`} className="swatch h-4 w-4 shrink-0 rounded-[4px]" style={{ background: o.color }} title="Сменить цвет"
               onClick={() => A.fieldUpdate(entityId, f.id, { options: opts.map(x => x.id === o.id ? { ...x, color: PALETTE[(PALETTE.indexOf(x.color) + 1) % PALETTE.length] } : x) })} />
             <Input value={o.label} className="h-7 flex-1 text-[12.5px]"
               onChange={ev => A.fieldUpdate(entityId, f.id, { options: opts.map(x => x.id === o.id ? { ...x, label: ev.target.value } : x) })} />
@@ -415,7 +419,7 @@ function AddFieldRow({ entityId }: { entityId: string }) {
   const add = () => {
     if (!label.trim()) return;
     const extra: Partial<Field> = {};
-    if (type === "select") extra.options = ["Вариант 1", "Вариант 2"].map((l, i) => ({ id: uid("o"), label: l, color: PALETTE[i % PALETTE.length] }));
+    if (type === "select" || type === "multiselect") extra.options = ["Вариант 1", "Вариант 2"].map((l, i) => ({ id: uid("o"), label: l, color: PALETTE[i % PALETTE.length] }));
     if (type === "relation") { extra.relationTo = relTo ?? others[0]?.id; if (!extra.relationTo) return; }
     A.fieldAdd(entityId, { label: label.trim(), type, inTable: true, ...extra });
     setLabel("");
@@ -449,7 +453,7 @@ function AddFieldRow({ entityId }: { entityId: string }) {
         <Button size="sm" className="h-8" onClick={add} disabled={!label.trim()}>Добавить</Button>
       </div>
       <p className="mt-2 text-[11.5px] leading-snug text-muted-foreground">
-        12 типов полей. «Связь с разделом» соединяет записи между разделами: сделка → компания, заказ → клиент.
+        {FIELD_TYPES.length} типов полей. «Связь с разделом» соединяет записи между разделами: сделка → компания, заказ → клиент.
       </p>
     </div>
   );
@@ -469,10 +473,12 @@ function AddStageRow({ entityId }: { entityId: string }) {
 // Диалог создания раздела
 export function NewEntityDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (id: string) => void }) {
   const [name, setName] = useState("");
+  const [many, setMany] = useState("");       // множественное число: подсказываем сами, человек правит
+  const [manyTouched, setManyTouched] = useState(false);
   const [pipeline, setPipeline] = useState(true);
   const create = () => {
-    const id = A.entAdd(name, pipeline);
-    setName(""); setPipeline(true);
+    const id = A.entAdd(name, pipeline, many);
+    setName(""); setMany(""); setManyTouched(false); setPipeline(true);
     onOpenChange(false);
     onCreated(id);
   };
@@ -480,8 +486,20 @@ export function NewEntityDialog({ open, onOpenChange, onCreated }: { open: boole
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle className="text-[15px]">Новый раздел</DialogTitle></DialogHeader>
-        <Input autoFocus placeholder="Например: Заказы, Объекты, Ученики…" value={name} onChange={e => setName(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && name.trim() && create()} className="h-10 text-[13px]" />
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="eyebrow">Один — как называется запись</label>
+            <Input autoFocus placeholder="Заказ, Объект, Ученик…" value={name}
+              onChange={e => { setName(e.target.value); if (!manyTouched) setMany(pluralGuess(e.target.value)); }}
+              onKeyDown={e => e.key === "Enter" && name.trim() && create()} className="mt-1 h-10 text-[13px]" />
+          </div>
+          <div>
+            <label className="eyebrow">Много — название раздела</label>
+            <Input placeholder="Заказы, Объекты, Ученики…" value={many}
+              onChange={e => { setMany(e.target.value); setManyTouched(true); }}
+              onKeyDown={e => e.key === "Enter" && name.trim() && create()} className="mt-1 h-10 text-[13px]" />
+          </div>
+        </div>
         <label className="flex cursor-pointer items-center justify-between rounded-md border p-3">
           <span>
             <span className="block text-[13px] font-medium">Воронка со стадиями</span>

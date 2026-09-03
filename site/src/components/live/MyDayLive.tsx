@@ -61,6 +61,7 @@ function SetupChecklist({ goSettings, onPresets, goEntity }: { goSettings: () =>
 export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }: { goTasks: () => void; goInbox: () => void; goSettings: () => void; onPresets: () => void; goEntity: () => void }) {
   const s = useApp();
   const start = sod();
+  const [armClear, setArmClear] = useState(false);
 
   // без useMemo: стор мутирует массивы на месте, кэш по ссылкам не заметит изменений
   const openTasks = s.tasks.filter(t => !t.done);
@@ -96,7 +97,9 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
         </p>
       </div>
 
-      {s.mode !== "cloud" && !setupMarks().structure && !setupMarks().imported && s.records.length > 0 && (
+      {/* Подсказка про примеры живёт, пока примеры реально есть в базе (а не «пока не трогали структуру»),
+          и кнопка «Очистить примеры» делает это здесь же, а не ведёт в Настройки. */}
+      {s.mode !== "cloud" && s.records.some(r => r.demo) && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2">
           <span className="text-[12px] leading-snug text-muted-foreground">
             Сейчас на экране <b className="font-medium text-foreground">примеры</b> — чужие сделки и клиенты, чтобы было видно, как работает.
@@ -106,10 +109,19 @@ export function MyDayLive({ goTasks, goInbox, goSettings, onPresets, goEntity }:
             style={{ background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" }}>
             Настроить под свой бизнес
           </button>
-          <button onClick={goSettings}
-            className="press shrink-0 rounded-md border px-2 py-1 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
-            Очистить примеры
-          </button>
+          {armClear ? (
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] text-destructive">удалить все примеры?</span>
+              <button onClick={() => { A.resetDemo(); setArmClear(false); }}
+                className="press rounded border border-destructive/40 px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/5">да</button>
+              <button onClick={() => setArmClear(false)} className="press rounded border px-2 py-0.5 text-[11px] text-muted-foreground">нет</button>
+            </span>
+          ) : (
+            <button onClick={() => setArmClear(true)}
+              className="press shrink-0 rounded-md border px-2 py-1 text-[12px] text-muted-foreground hover:border-foreground/25 hover:text-foreground">
+              Очистить примеры
+            </button>
+          )}
         </div>
       )}
 

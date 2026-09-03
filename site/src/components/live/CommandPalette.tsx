@@ -6,6 +6,7 @@ import { relTime, displayValue, plural } from "@/lib/model";
 import { EntIcon } from "./icons";
 import { Inbox, ListChecks, MessageSquare, Search, Settings, Sparkles, SunMedium, Zap, LayoutDashboard, Plus, CornerDownLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { setViewState } from "@/lib/viewstate";
 
 export interface PaletteItem {
   id: string; group: string; title: string; sub?: string;
@@ -82,8 +83,16 @@ export function CommandPalette({ open, onClose, goPage }: { open: boolean; onClo
     // ---- разделы и экраны
     const pages: [string, string, React.ElementType][] = [
       ["myday", "Мой день", SunMedium], ["tasks", "Задачи", ListChecks], ["inbox", "Входящие", Inbox],
-      ["dashboard", "Дашборд", LayoutDashboard], ["automations", "Автоматизации", Zap], ["settings", "Настройки", Settings],
+      ["routing", "Приём заявок", LayoutDashboard], ["automations", "Автоматизации", Zap], ["settings", "Настройки", Settings],
     ];
+    // «Сводка» — это вкладка раздела с воронкой, а не отдельный экран: ведём в первую воронку
+    {
+      const pipe = allEntities().find(e => e.stages?.length) ?? allEntities()[0];
+      if (pipe && (!needle || norm("сводка дашборд отчёт").includes(needle) || needle.length < 2)) {
+        out.push({ id: "p_stats", group: "Экраны", title: "Сводка", sub: `по разделу «${pipe.namePlural}»`, icon: LayoutDashboard,
+          run: () => { setViewState(pipe.id, { view: "stats" }); go("ent:" + pipe.id); } });
+      }
+    }
     for (const e of allEntities()) {
       if (needle && !norm(e.namePlural).includes(needle) && !norm(e.name).includes(needle)) continue;
       out.push({

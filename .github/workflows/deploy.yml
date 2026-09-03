@@ -22,11 +22,18 @@ jobs:
         working-directory: site
     steps:
       - uses: actions/checkout@v4
+      # Воспроизводимая сборка: ровно те версии, что в pnpm-lock.yaml (npm install тянул свежие
+      # semver-совместимые релизы ~400 пакетов, включая GramJS с MTProto-сессиями)
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
-      - run: npx vite build --base=/xxlcrm/
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vite build --base=/xxlcrm/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist

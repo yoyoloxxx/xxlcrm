@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.21"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.22"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -126,12 +126,10 @@ async function notify(ws: string, text: string): Promise<void> {
   const token = await tgBot(ws);
   if (!token) return;
   const { data: targets } = await db.from("notify_targets").select("chat_id").eq("workspace_id", ws);
-  for (const t of targets ?? []) {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: t.chat_id, text, disable_web_page_preview: true }),
-    }).catch(() => null);
-  }
+  await Promise.all((targets ?? []).map((t: Any) => fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: t.chat_id, text, disable_web_page_preview: true }),
+  }).catch(() => null)));
 }
 
 // «/start notify_...» у своего бота = подписка на уведомления.
@@ -146,9 +144,14 @@ async function handleStart(ws: string, body: Any): Promise<boolean> {
   // Бот публичный: его имя есть на сайте и в самой CRM, написать ему может кто угодно.
   // Поэтому мало префикса — в ссылке-приглашении лежит метка пространства, и без неё
   // подписка не оформляется. Иначе посторонний получал бы каждую заявку себе в личку.
+  // Метка — СЕКРЕТ пространства (channel_hooks, source «notify»), который выдаёт владелец и
+  // может перевыпустить. Раньше меткой были первые символы id пространства, а id лежит в адресе
+  // приёмника на сайте и у каждого бывшего сотрудника — подписаться на все заявки мог любой.
   const marker = arg.slice(7);
-  if (marker !== ws.slice(0, 8)) {
-    console.log("notify: чужая или пустая метка", marker);
+  const { data: ns } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", "notify").maybeSingle();
+  const want = String(ns?.secret ?? "");
+  if (!want || marker.length < 8 || marker !== want) {
+    console.log("notify: чужая или пустая метка");
     return true;                      // молча: не подсказываем, что метка бывает правильной
   }
   const name = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(" ") || m.from?.username || "";
@@ -165,7 +168,7 @@ async function handleStart(ws: string, body: Any): Promise<boolean> {
 }
 
 // ---------- превращение входящего в диалог и заявку ----------
-async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
+async function ingest(ws: string, src: string, msg: Msg, onlyChat = false): Promise<boolean> {
   // Колонки automations может не быть в старой схеме. Раньше запрос падал целиком и заявка
   // молча терялась — теперь структуру берём отдельным запросом, а маршруты по возможности.
   const { data: cfg } = await db.from("ws_config").select("entities").eq("workspace_id", ws).maybeSingle();
@@ -176,7 +179,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     autoCol = a?.automations ?? {};
   } catch { autoCol = {}; }
   const routes: Any[] = Array.isArray(autoCol) ? [] : (autoCol.routes ?? []);
-  const route: Any = routes.find(r => r.source === src) ?? { source: src, auto: true, createClient: true };
+  const route: Any = { ...(routes.find(r => r.source === src) ?? { source: src, auto: true, createClient: true }), ...(onlyChat ? { auto: false } : {}) };
 
   const pipeline = entities.find(e => e.id === "deals" && e.stages?.length) ?? entities.find(e => e.stages?.length);
   const entity = entities.find(e => e.id === route.entityId) ?? pipeline;
@@ -197,7 +200,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   }
 
   const nowMs = Date.now();
-  msg = { ...msg, name: clean(msg.name, 120), text: clean(msg.text, 4000) };
+  msg = { ...msg, name: clean(msg.name, 120), text: clean(msg.text, 4000), phone: msg.phone ? clean(msg.phone, 40) : undefined };
   const message = { id: uid("m"), ts: nowMs, out: false, text: msg.text };
 
   // 1) диалог: старый — дописываем, нового — заводим
@@ -210,7 +213,8 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     if (extKey === undefined) { existing = null; chat = null; }
     else {
     const extVal = msg.ext[extKey];
-    const { data: chats } = await db.from("chats").select("*").eq("workspace_id", ws).eq("channel", src);
+    // Фильтруем на стороне базы: раньше на КАЖДОЕ сообщение грузились все диалоги канала целиком, с перепиской
+    const { data: chats } = await db.from("chats").select("*").eq("workspace_id", ws).eq("channel", src).eq(`ext->>${extKey}`, String(extVal)).limit(5);
     existing = (chats ?? []).find((c: Any) => c.ext && String(c.ext[extKey]) === String(extVal)) ?? null;
     if (existing) {
       // Дописываем сообщение НА СТОРОНЕ БАЗЫ: чтение-изменение-запись всего массива теряло
@@ -223,7 +227,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
       }
       // Продолжение живой заявки — новую не создаём. Но если запись удалили или она уже закрыта,
       // человек пишет по новому поводу: это новая заявка, иначе сообщение потеряется в старом диалоге.
-      if (await liveRecord(ws, existing.record_id, entities)) return;
+      if (await liveRecord(ws, existing.record_id, entities)) return true;
     } else {
       // id диалога выводим из внешнего ключа: два сообщения, пришедшие одновременно,
       // попадут в ОДНУ строку, а не заведут два диалога и двух клиентов
@@ -236,15 +240,17 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
   }
 
   if (!route.auto || !entity) {
-    if (chat) await db.from("chats").insert(chat);
-    return;
+    if (chat) { await db.from("chats").insert(chat); return true; }
+    // Форма с сайта при «только диалог»: диалога у формы нет — раньше заявка ложилась в журнал
+    // и исчезала для всех. Оставляем строку необработанной: клиент разберёт её при открытии.
+    return src === "tilda" || src === "ig" ? false : true;
   }
 
   // 2) клиент: узнаём по телефону, иначе заводим карточку (если маршрут просит)
   let clientId: string | null = null;
   const phoneD = digits(msg.phone);
   if (clientEnt && phoneD.length >= 7) {
-    const { data: recs } = await db.from("records").select("id, values").eq("workspace_id", ws).eq("entity_id", clientEnt.id);
+    const recs = await allRows(db.from("records").select("id, values").eq("workspace_id", ws).eq("entity_id", clientEnt.id));
     const phoneF = clientEnt.fields?.find((f: Any) => f.type === "phone");
     const hit = phoneF ? (recs ?? []).find((r: Any) => digits(r.values?.[phoneF.id]) === phoneD) : undefined;
     if (hit) clientId = hit.id;
@@ -265,7 +271,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
 
   // 3) заявка: если у клиента уже есть открытая — не плодим вторую
   if (clientId) {
-    const { data: open } = await db.from("records").select("id, values, stage_id").eq("workspace_id", ws).eq("entity_id", entity.id);
+    const open = await allRows(db.from("records").select("id, values, stage_id").eq("workspace_id", ws).eq("entity_id", entity.id));
     const relF = entity.fields?.find((f: Any) => f.type === "relation" && f.relationTo === clientEnt?.id);
     const openOne = relF ? (open ?? []).find((r: Any) =>
       r.values?.[relF.id] === clientId && entity.stages?.find((s: Any) => s.id === r.stage_id)?.kind === "open") : undefined;
@@ -275,7 +281,7 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
         id: uid("a"), workspace_id: ws, record_id: openOne.id, ts: nowMs, kind: "comment",
         text: `Клиент снова написал (${srcName(src)}) — диалог привязан к текущей записи`, user_id: null,
       });
-      return;
+      return true;
     }
   }
 
@@ -321,6 +327,18 @@ async function ingest(ws: string, src: string, msg: Msg): Promise<void> {
     "",
     msg.text.slice(0, 300),
   ].filter(x => x !== "").join("\n"));
+  return true;
+}
+
+// PostgREST отдаёт максимум 1000 строк — дальше листаем, иначе клиент №1001 «не узнаётся» и дублируется
+async function allRows(q: Any): Promise<Any[]> {
+  const out: Any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await q.range(from, from + 999);
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
 }
 
 // Жива ли запись, к которой привязан диалог: существует и ещё не закрыта
@@ -375,7 +393,9 @@ Deno.serve(async (req: Request) => {
   // проба: «какая версия функции стоит и какие источники понимает»
   if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda", "ig"] });
   const src = url.searchParams.get("src") ?? "tg";
-  const key = req.headers.get("x-telegram-bot-api-secret-token") ?? url.searchParams.get("k") ?? "";
+  // Telegram подписывает запросы заголовком — параметр k в адресе для него не принимаем:
+  // адрес вебхука виден в getWebhookInfo, а заголовок знает только Telegram.
+  const key = src === "tg" ? (req.headers.get("x-telegram-bot-api-secret-token") ?? "") : (req.headers.get("x-hook-key") ?? url.searchParams.get("k") ?? "");
 
   const { data: hook } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", src).maybeSingle();
   // Проверка вебхука Meta (Instagram): GET с hub.challenge, надо вернуть challenge голым текстом.
@@ -391,13 +411,26 @@ Deno.serve(async (req: Request) => {
   const payload = await readPayload(req);
   // Идемпотентность: Telegram повторяет доставку, если не увидел 200 вовремя. Раньше повтор
   // плодил второй такой же диалог и накручивал счётчик непрочитанных.
-  const dedupId = String(payload?.update_id ?? payload?.message_id ?? payload?.marker ?? "");
+  const dedupId = String(payload?.update_id ?? payload?.idMessage ?? payload?.message?.body?.mid
+    ?? payload?.entry?.[0]?.messaging?.[0]?.message?.mid ?? payload?.tranid ?? payload?.message_id ?? payload?.marker ?? "");
   if (dedupId) {
     const { data: seen, error: seenErr } = await db.from("inbound")
       .select("id").eq("workspace_id", ws).eq("source", src).eq("ext_key", dedupId).limit(1);
     if (!seenErr && seen && seen.length) return json({ ok: true, duplicate: true });
   }
   if (src === "tg" && await handleStart(ws, payload)) return json({ ok: true, subscribed: true });
+  // Форма с сайта и пересыльщики: адрес приёмника по дизайну лежит в коде сайта, значит его знает
+  // и спамер. Лимит по пространству и источнику — 20 заявок в минуту — и поле-приманка:
+  // роботы заполняют все поля, живые люди скрытое не видят.
+  if (src === "tilda" || src === "ig") {
+    if (payload?._hp || payload?.website_url_hp) return json({ ok: true });
+    const { count } = await db.from("inbound").select("id", { count: "exact", head: true })
+      .eq("workspace_id", ws).eq("source", src).gt("ts", Date.now() - 60_000);
+    if ((count ?? 0) >= 20) return json({ ok: false, error: "rate" }, 429);
+  }
+  // «/start» без метки — человек просто нажал кнопку у бота: диалог заводим, заявку и уведомление
+  // не создаём, пока он ничего не написал (спам-аккаунты жали Start и плодили сделки).
+  const justStart = src === "tg" && /^\/start\b/.test(String(payload?.message?.text ?? ""));
   const msg = src === "tg" ? parseTelegram(payload)
     : src === "wa" ? parseWhatsApp(payload)
     : src === "max" ? parseMax(payload)
@@ -407,7 +440,11 @@ Deno.serve(async (req: Request) => {
 
   let processed = true, error: string | null = null;
   try {
-    await ingest(ws, src, msg);
+    if (justStart) {
+      // только диалог: подставляем маршрут «только диалог» на этот вызов
+      const ok = await ingest(ws, src, { ...msg, text: "нажал Start" }, true);
+      processed = ok;
+    } else processed = await ingest(ws, src, msg);
   } catch (e) {
     processed = false;                       // не вышло — приложение доделает при открытии
     error = String((e as Error).message ?? e).slice(0, 300);
@@ -415,9 +452,11 @@ Deno.serve(async (req: Request) => {
     // Владельцу — честное «заявка пришла, но не легла», иначе он узнает о потере от клиента
     await notify(ws, `Заявка пришла (${srcName(src)}), но НЕ сохранилась: ${error}\n${(msg.name || msg.phone || "")}\n${msg.text.slice(0, 200)}`).catch(() => null);
   }
+  // Поля формы в журнал — с потолком: 64 КБ мусора на каждую строку раздували базу до потолка
+  const fieldsJ = msg.fields ? JSON.stringify(msg.fields) : "";
   const logRow: Any = {
-    workspace_id: ws, source: src, ext: msg.ext, name: cut(msg.name ?? ""), phone: msg.phone ?? null,
-    text: cut(msg.text ?? ""), fields: msg.fields ?? null, ts: Date.now(), processed, error,
+    workspace_id: ws, source: src, ext: msg.ext, name: cut(msg.name ?? ""), phone: msg.phone ? clean(msg.phone, 40) : null,
+    text: cut(msg.text ?? ""), fields: fieldsJ && fieldsJ.length <= 4000 ? msg.fields : null, ts: Date.now(), processed, error,
   };
   const logged = await db.from("inbound").insert({ ...logRow, ext_key: dedupId || null });
   // Функцию могли выкатить раньше, чем выполнили SQL-миграцию: тогда колонки ext_key нет,

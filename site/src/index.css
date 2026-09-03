@@ -94,8 +94,11 @@
      а честно увеличиваем сами кнопки и убираем задержку двойного тапа. */
   @media (pointer: coarse) {
     button, [role="button"], a, label, summary { touch-action: manipulation; }
-    .press, button { min-height: 34px; }
-    .press:where(.rounded-full, .rounded, .rounded-md, .rounded-\[3px\]) { min-width: 34px; }
+    /* Галочки, тумблеры, радио и квадратики-свотчи цвета — не кнопки-подписи: растянутые
+       до 34px они превращались в вытянутые прямоугольники и ломали строки таблицы. */
+    .press:not([role="checkbox"], [role="switch"], [role="radio"], .swatch),
+    button:not([role="checkbox"], [role="switch"], [role="radio"], .swatch) { min-height: 34px; }
+    .press:where(.rounded-full, .rounded, .rounded-md, .rounded-\[3px\]):not([role="checkbox"], [role="switch"], [role="radio"], .swatch) { min-width: 34px; }
   }
 }
 

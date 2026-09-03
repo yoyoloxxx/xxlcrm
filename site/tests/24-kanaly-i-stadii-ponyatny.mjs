@@ -135,7 +135,7 @@ const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromi
 // ---------- T4: серверная функция готова к Instagram ----------
 {
   const hook = readFileSync("../supabase/functions/hook/index.ts", "utf8");
-  ok("hook: версия поднята до 0.21", /const VERSION = "0\.21"/.test(hook));
+  ok("hook: версия поднята (0.21+)", /const VERSION = "0\.2[1-9]"/.test(hook));
   ok("hook: источник ig объявлен", /sources: \["tg", "wa", "max", "tilda", "ig"\]/.test(hook));
   ok("hook: проверка Meta возвращает hub.challenge голым текстом", /hub\.challenge/.test(hook) && /new Response\(challenge/.test(hook));
   ok("hook: парсер Instagram пропускает эхо своих сообщений", /parseInstagram/.test(hook) && /is_echo/.test(hook));

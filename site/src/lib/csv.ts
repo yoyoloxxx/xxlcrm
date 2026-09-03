@@ -69,20 +69,80 @@ export function looksLikeData(row: string[]): boolean {
   return phones > 0 || (digits >= Math.ceil(row.length / 2) && words < row.length / 2);
 }
 
-// Автоподбор поля под колонку: по смыслу заголовка, а не по порядку
-export const HEADER_HINTS: { re: RegExp; type: string[]; ids?: string[] }[] = [
-  { re: /^(имя|фио|name|клиент|контакт|заголовок|название|title|что)/i, type: ["text"], ids: ["title"] },
+// Псевдо-цели импорта: не поля раздела, а «куда ещё может лечь колонка из чужой CRM».
+// Их знает диалог импорта и importRecords в сторе; строки — чтобы не тянуть store в csv.ts.
+export const IMPORT_TARGETS = {
+  stage: "__stage",       // стадия воронки (по названию, через таблицу соответствий)
+  created: "__created",   // «Дата создания» из старой CRM → createdAt/updatedAt записи
+  closed: "__closed",     // «Дата закрытия» → stageAt (когда сделка попала в текущую стадию)
+  owner: "__owner",       // «Ответственный» → ownerId (ищем сотрудника по имени)
+  note: "__note",         // «Примечание» → комментарий в хронологию записи
+  extId: "__extid",       // «ID» из старой CRM → скрытое поле ext_id, по нему дедуп при повторной загрузке
+  relPhone: "__relphone", // телефон КЛИЕНТА в файле сделок → по нему ищем/заводим связанную карточку
+} as const;
+/** Колонка, которую заголовок велит пропустить (дата изменения и прочее служебное) */
+export const IMPORT_SKIP = "__skip";
+
+// Автоподбор поля под колонку: по смыслу заголовка, а не по порядку.
+// Порядок важен: первый подходящий хинт побеждает, но если в разделе нет поля нужного типа —
+// пробуем следующий (так «Контакт» в сделках уходит в связь, а в клиентах — в имя).
+export const HEADER_HINTS: { re: RegExp; type: string[]; ids?: string[]; rel?: RegExp }[] = [
+  { re: /^id$|^id\s|внешний\s*id|external/i, type: [IMPORT_TARGETS.extId] },
+  { re: /(дата\s*изменен|изменен|modified|updated|кем\s+создан|created by)/i, type: [IMPORT_SKIP] },
+  // связь с карточкой клиента: «Основной контакт» (amo), «Клиент», «Контакт»; «Компания» — только если
+  // в разделе есть связь с разделом-компаниями, иначе колонка честно остаётся без пары (rel — фильтр по названию раздела-цели)
+  { re: /^(компания|организация|company|название компании)$/i, type: ["relation"], rel: /компани|организац|фирм|контрагент|юрлиц/i },
+  { re: /^(основной\s+контакт|контакт|контактное\s+лицо|клиент|заказчик|покупатель|customer|contact|client)$|^(имя|название|name)\s+(клиента|контакта|заказчика|покупателя)$/i, type: ["relation"] },
+  { re: /^(имя|фио|name|клиент|контакт|заголовок|название|title|что)|фамил|отчеств|full name|полное имя|surname|last name|first name|middle name/i, type: ["text"], ids: ["title"] },
   { re: /(телефон|phone|моб|tel|номер)/i, type: ["phone"] },
+  // в разделе нет телефона (сделки), но есть связь с клиентами: «Рабочий телефон» → телефон клиента для связи.
+  // Только явные слова: «Номер договора» сюда попадать не должен
+  { re: /(телефон|phone|мобильн)/i, type: [IMPORT_TARGETS.relPhone] },
   { re: /(почта|mail|email|e-mail)/i, type: ["email"] },
   { re: /(сумма|цена|стоим|чек|amount|price|бюджет)/i, type: ["money", "number"] },
   { re: /(дата\s*рожд|рожден|birth|др\b|bday)/i, type: ["date"], ids: ["bday"] },
+  { re: /(дата\s*создан|создан|created|добавлен)/i, type: [IMPORT_TARGETS.created] },
+  { re: /(дата\s*закрыт|закрыт|заверш|closed|close date)/i, type: [IMPORT_TARGETS.closed] },
   { re: /(дедлайн|срок|дата|when|date)/i, type: ["date", "datetime"] },
   { re: /(источник|канал|откуда|source)/i, type: ["select"], ids: ["source"] },
-  { re: /(стади|этап|статус|stage|status)/i, type: ["__stage"] },
-  { re: /(коммент|заметк|описан|note|comment)/i, type: ["textarea"] },
+  { re: /(стади|этап|статус|stage|status)/i, type: [IMPORT_TARGETS.stage] },
+  { re: /(примеч|заметк|коммент|note|comment|описан)/i, type: [IMPORT_TARGETS.note] },
   { re: /(сайт|url|ссылк|инст|instagram|telegram|vk)/i, type: ["url"] },
-  { re: /(ответствен|менеджер|owner|manager)/i, type: ["user"] },
+  { re: /(ответствен|менеджер|owner|manager|assigned)/i, type: [IMPORT_TARGETS.owner] },
 ];
+
+/** Порядок частей ФИО при склейке в заголовок: Битрикс отдаёт «Имя;Фамилия;Отчество», а
+    склеенное «Пётр Иванов Сергеевич» режет глаз. Собираем «Пётр Сергеевич Иванов» — как в примерах. */
+export function namePartRank(header: string): number {
+  if (/фамил|surname|last name/i.test(header)) return 2;
+  if (/отчеств|middle name/i.test(header)) return 1;
+  return 0;
+}
+
+/** Синонимы стадий из чужих CRM: amo «Успешно реализовано», Битрикс «Сделка успешна», «Анализ причины провала».
+    Сначала проверяем ПРОИГРЫШ: «Закрыто и не реализовано» иначе попадало бы в «реализ» = успех. */
+export function guessStageKind(label: string): "won" | "lost" | "new" | null {
+  const s = label.toLowerCase();
+  if (/не реализ|провал|отказ|проигр|lost|закрыт.*не реализ|анализ причины|не успеш|неудач|срыв/.test(s)) return "lost";
+  if (/успеш|реализ|оплач|выигр|won|закрыт.*успеш|сделка успешна|получен|выполнен|завершен/.test(s)) return "won";
+  if (/новая|новый|первичн|неразобр|new|входящ/.test(s)) return "new";
+  return null;
+}
+
+/** Подобрать стадию раздела под значение из файла: точное имя → синонимы → часть названия.
+    null — не нашли (диалог предложит создать стадию с таким названием). */
+export function matchStage<S extends { id: string; label: string; kind: string }>(value: string, stages: S[]): S | null {
+  const v = value.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!v) return null;
+  const exact = stages.find(s => s.label.trim().toLowerCase() === v);
+  if (exact) return exact;
+  const kind = guessStageKind(v);
+  if (kind === "won" || kind === "lost") return stages.find(s => s.kind === kind) ?? null;
+  if (kind === "new") return stages.find(s => s.kind === "open") ?? null;
+  // «Согласование договора» ↔ «Договор»: одно название целиком входит в другое
+  const part = stages.find(s => { const l = s.label.trim().toLowerCase(); return l.length >= 4 && (v.includes(l) || l.includes(v)); });
+  return part ?? null;
+}
 
 /** Число из ячейки: «12 000,50», «1 234», «1,234.56», «50 000 ₽», «(1 200)», «1,5E+09», «5 000-» (1С), «−5 000».
     Русский и английский форматы различаем по позиции последнего разделителя. */

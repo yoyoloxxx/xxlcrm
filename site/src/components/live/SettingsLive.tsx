@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { plural, relTime, type InboundSource, type IntStatus } from "@/lib/model";
 import { useApp, A, storageState, routeSummary, setAuthStage } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove, channelCheck, igEnsureReceiver, igReceiver, igDisableReceiver } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove, channelCheck, igEnsureReceiver, igReceiver, igDisableReceiver, ensureNotifySecret, rotateNotifySecret } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user-lazy";
 import { Input } from "@/components/ui/input";
@@ -357,10 +357,18 @@ function NotifyCard() {
   const s = useApp();
   const [list, setList] = useState<{ chat_id: string; name: string | null }[]>([]);
   const bot = s.integrations.tg.botName ?? "";
+  const [secret, setSecret] = useState<string | null>(null);
+  const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
   const refresh = () => { void notifyTargets().then(setList); };
-  useEffect(() => { if (s.mode === "cloud") refresh(); }, [s.mode, s.wsId]);
+  // ссылка подписки содержит СЕКРЕТ пространства (не id) — создаёт/читает его только владелец
+  useEffect(() => {
+    if (s.mode !== "cloud") return;
+    refresh();
+    if (owner) void ensureNotifySecret().then(setSecret);
+  }, [s.mode, s.wsId, owner]);
   if (s.mode !== "cloud" || s.integrations.tg.status !== "ok" || !bot) return null;
-  const link = notifyLink(bot, s.wsId ?? "");
+  if (!owner) return null;
+  const link = secret ? notifyLink(bot, secret) : "";
   return (
     <div data-ch="notify" className="mt-2 rounded-md border p-3">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
@@ -376,9 +384,15 @@ function NotifyCard() {
           className="press inline-flex h-9 items-center rounded-md bg-primary px-3 text-[12.5px] font-medium text-primary-foreground hover:opacity-90">
           Подключить уведомления
         </a>
-        <Button variant="outline" className="h-9 gap-1.5" onClick={() => { navigator.clipboard?.writeText(link).then(() => toast("Ссылка скопирована — откройте её на телефоне")); }}>
+        <Button variant="outline" className="h-9 gap-1.5" disabled={!link} onClick={() => { navigator.clipboard?.writeText(link).then(() => toast("Ссылка скопирована — откройте её на телефоне")); }}>
           <Copy className="size-3.5" />
         </Button>
+        <Button variant="outline" className="h-9 text-[12px]" title="Ссылка разошлась или ушёл сотрудник: старая ссылка перестанет подписывать, уже подписанных уберите ниже"
+          onClick={async () => {
+            if (!window.confirm("Перевыпустить ссылку уведомлений? Старая перестанет работать. Уже подписанных при необходимости уберите вручную в списке ниже.")) return;
+            const sec = await rotateNotifySecret();
+            if (sec) { setSecret(sec); toast.success("Ссылка уведомлений перевыпущена"); }
+          }}>Перевыпустить ссылку</Button>
       </div>
       {list.length > 0 && (
         <div className="mt-2 flex flex-col gap-1">
@@ -693,15 +707,14 @@ export function IntegrationsLive() {
           </>
         )}
 
-        {/* Запасной путь без аккаунта: временный мост, честно помеченный как небезопасный */}
-        {!ownHook && (
+        {/* Запасной путь ТОЛЬКО без аккаунта: временный мост, честно помеченный как небезопасный.
+            В облаке есть настоящий приёмник — чужой публичный сервис там ни к чему. */}
+        {!ownHook && s.mode !== "cloud" && (
           <>
-            {s.mode !== "cloud" && (
-              <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
-                Постоянный приём с сайта работает через сервер — <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в общее пространство</button>.
-                Пока без входа есть только временный мост для проверки формы.
-              </p>
-            )}
+            <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+              Постоянный приём с сайта работает через сервер — <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в общее пространство</button>.
+              Пока без входа есть только временный мост для проверки формы.
+            </p>
             {ints.tilda.error && <p className="mt-1 text-[11.5px] text-destructive">{ints.tilda.error}</p>}
             {ints.tilda.status !== "ok" ? (
               <div className="mt-2 flex flex-wrap gap-2">

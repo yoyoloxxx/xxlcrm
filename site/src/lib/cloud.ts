@@ -6,10 +6,11 @@ import { recDiff, type Merge } from "./recdiff";
 import { supa } from "./supa";
 import type { Rec, Task, Activity, Chat, ReplyTemplate, User, EntityCfg, Rule, Route } from "./model";
 import { uid, defaultRules, defaultRoutes } from "./model";
-import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup, isPrivateChat } from "./store";
+import { getState, enterCloud, applyRemote, setAuthStage, setWsMeta, cloudHooks, cloudPendingHook, clone, ruleHooks, allowUnload, flushSaves, localBackup, isPrivateChat, wipeDeviceSecrets } from "./store";
 import { DEFAULT_TEMPLATES, ENTITIES } from "./data";
 import { planTransfer } from "./transfer";
-import { inboundBoot, inboundSubscribe } from "./inbound";
+import { inboundBoot, inboundSubscribe, rotateNotifySecret } from "./inbound";
+import { tguDisconnect } from "./tg-user-lazy";
 import { toast } from "sonner";
 
 let wsId: string | null = null;
@@ -39,6 +40,9 @@ const snap = {
 };
 
 const canon = (x: unknown) => JSON.stringify(x);
+// Конфиг пространства сравниваем БЕЗ счётчика срабатываний: иначе каждое сработавшее правило
+// уезжало в базу как «структура обновлена коллегой» и затирало чужие правки правил.
+const cfgCanon = (e: EntityCfg[], a: Rule[], r: Route[]) => canon({ e, a: a.map(x => ({ ...x, fired: 0 })), r });
 
 // ---------- маппинг модель ↔ строка таблицы ----------
 type Row = Record<string, unknown>;
@@ -104,7 +108,7 @@ export async function signIn(email: string, password: string): Promise<string | 
   return null;
 }
 
-export async function signOutCloud(): Promise<void> {
+export async function signOutCloud(wipe = false): Promise<void> {
   // Сначала дать несохранённому уйти в базу — выход не должен тихо съедать последние правки.
   flushSaves();
   const till = Date.now() + 4000;                    // потолок: лежит сеть — человек всё равно выходит
@@ -113,6 +117,12 @@ export async function signOutCloud(): Promise<void> {
     if (!window.confirm("Часть изменений не ушла в облако. Выйти всё равно? Несохранённое пропадёт.")) return;
   }
   try { await supa.auth.signOut(); } catch { /* сессии нет */ }
+  // Общий компьютер: «выйти» не должно оставлять следующему человеку подключённые каналы и
+  // сессию личного Telegram — по просьбе стираем их с устройства (в облаке всё остаётся).
+  if (wipe) {
+    try { await tguDisconnect(); } catch { /* сессии не было */ }
+    wipeDeviceSecrets();
+  }
   allowUnload();             // уход намеренный: сторож «не закрывайте вкладку» здесь только запирал человека в мёртвом интерфейсе
   window.location.reload();  // чистый возврат в демо-режим
 }
@@ -380,7 +390,11 @@ export function iAmOwner(): boolean {
 export async function rotateInvite(): Promise<string | null> {
   const s = getState();
   if (!s.wsId) return null;
-  const code = Array.from({ length: 8 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
+  // Строчными: join_workspace сравнивает с lower(code) — перевыпущенный ВЕРХНИМ регистром код
+  // не подходил никому. 12 символов из 32 = 60 бит против перебора.
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const rnd = new Uint32Array(12); crypto.getRandomValues(rnd);
+  const code = Array.from(rnd, n => alphabet[n % alphabet.length]).join("");
   const { error } = await supa.from("workspaces").update({ invite_code: code }).eq("id", s.wsId);
   if (error) {
     toast.error("Не удалось перевыпустить код", { description: /policy|denied|permission/i.test(error.message) ? "Это может только владелец пространства" : error.message.slice(0, 90) });
@@ -401,19 +415,35 @@ export async function removeMember(userId: string): Promise<boolean> {
     return false;
   }
   applyRemote(st2 => { st2.users = st2.users.filter(u => u.id !== userId); });
-  toast("Сотрудник убран из пространства", { description: "Его записи и переписка остались на месте" });
+  // Ушедший знал код приглашения и мог подписаться на уведомления — оба ключа перевыпускаем,
+  // иначе доступ к базе и лидам остаётся у него навсегда.
+  await rotateInvite();
+  await rotateNotifySecret();
+  toast("Сотрудник убран из пространства", { description: "Записи остались. Код приглашения и ссылка уведомлений перевыпущены; подписчиков уведомлений проверьте в Настройках" });
   return true;
 }
 
 // ---------- загрузка пространства ----------
+// PostgREST отдаёт не больше 1000 строк на запрос: команда с историей за месяц получала
+// «дырявые» данные — часть событий и записей просто не приезжала, без единой ошибки.
+async function fetchAll(table: string, ws: string): Promise<{ data: Row[] | null; error: { message: string } | null }> {
+  const out: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supa.from(table).select("*").eq("workspace_id", ws).order("id", { ascending: true }).range(from, from + 999);
+    if (error) return { data: null, error };
+    out.push(...((data ?? []) as Row[]));
+    if (!data || data.length < 1000) break;
+  }
+  return { data: out, error: null };
+}
 async function openWorkspace(id: string, meId: string): Promise<void> {
   wsId = id;
   const [recs, tasks, acts, chats, tpls, mems, wss, cfg] = await Promise.all([
-    supa.from("records").select("*").eq("workspace_id", id),
-    supa.from("tasks").select("*").eq("workspace_id", id),
-    supa.from("activities").select("*").eq("workspace_id", id),
-    supa.from("chats").select("*").eq("workspace_id", id),
-    supa.from("reply_templates").select("*").eq("workspace_id", id),
+    fetchAll("records", id),
+    fetchAll("tasks", id),
+    fetchAll("activities", id),
+    fetchAll("chats", id),
+    fetchAll("reply_templates", id),
     supa.from("members").select("*").eq("workspace_id", id),
     supa.from("workspaces").select("name, invite_code").eq("id", id).single(),
     supa.from("ws_config").select("*").eq("workspace_id", id).maybeSingle(),
@@ -449,7 +479,7 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
   enterCloud(data, { wsId: id, wsName: String(wss.data?.name ?? "Пространство"), inviteCode: String(wss.data?.invite_code ?? ""), users, meId });
 
   // снимки для диффа
-  cfgSnap = canon({ e: data.entities, a: data.automations, r: data.routes });
+  cfgSnap = cfgCanon(data.entities, data.automations, data.routes);
   cfgSeen = Number((cfg.data as Row | null)?.updated_at ?? 0);
   // Заводскую структуру записываем в базу ТОЛЬКО если её там правда нет (первый вход),
   // а не потому, что запрос не прошёл: это стирало настройку всей команды.
@@ -487,9 +517,8 @@ async function saveCfg(id: string, entities: EntityCfg[], automations: Rule[], r
       if (remoteEnts?.length) {
         cfgSeen = Number(fresh.data.updated_at ?? 0);
         applyRemote(st2 => { st2.entities = remoteEnts; });
-        cfgSnap = canon({ e: remoteEnts, a: automations, r: routes });
-        toast("Структуру разделов обновил коллега — забрал его версию", { description: "Ваши правки структуры примените ещё раз" });
-        return;
+        toast("Структуру разделов обновил коллега — забрал его версию", { description: "Ваши правки структуры примените ещё раз; правила и маршруты сохранены" });
+        entities = remoteEnts;              // дальше пишем: его разделы + наши правила и маршруты
       }
     }
   }
@@ -517,10 +546,10 @@ async function doSave(): Promise<void> {
   saving = true;
   try {
     const st = getState();
-    const cfgJ = canon({ e: st.entities, a: st.automations, r: st.routes });
+    const cfgJ = cfgCanon(st.entities, st.automations, st.routes);
     if (cfgJ !== cfgSnap) {
       await saveCfg(wsId, st.entities, st.automations, st.routes);
-      cfgSnap = cfgJ;
+      cfgSnap = cfgCanon(getState().entities, getState().automations, getState().routes);
     }
     const collections: { table: keyof typeof snap; items: { id: string }[]; toRow: (x: never) => Row }[] = [
       { table: "records", items: st.records, toRow: M.records.toRow as (x: never) => Row },
@@ -601,13 +630,38 @@ async function doSave(): Promise<void> {
         if (error) { problems.push(c.table + ": " + error.message); break; }
         for (const x of part) snap[c.table].set(x.id, x.j);
       }
-      if (deletes.length) {
-        const { error } = await supa.from(c.table).delete().in("id", deletes);
-        if (error) problems.push(c.table + " (удаление): " + error.message);
-        else for (const id of deletes) snap[c.table].delete(id);
+      // Удаление — тоже пачками (2000 id одним URL давали 414 и «НЕ сохраняется» навсегда),
+      // и с проверкой, что база правда удалила: чужое удаляет только владелец, а отказ RLS
+      // приходит как «успех, 0 строк» — раньше запись исчезала у одного и оставалась у всех.
+      const refused: string[] = [];
+      for (let i = 0; i < deletes.length; i += 200) {
+        const part = deletes.slice(i, i + 200);
+        const { data, error } = await supa.from(c.table).delete().in("id", part).select("id");
+        if (error) { problems.push(c.table + " (удаление): " + error.message); break; }
+        const gone = new Set(((data ?? []) as Row[]).map(r => String(r.id)));
+        for (const id of part) {
+          if (gone.has(id)) { snap[c.table].delete(id); continue; }
+          refused.push(id);
+        }
+      }
+      if (refused.length) {
+        // возвращаем на экран то, что база не отдала — из снимка (он и есть версия базы)
+        applyRemote(st2 => {
+          for (const id of refused) {
+            const j = snap[c.table].get(id); if (!j) continue;
+            const obj = JSON.parse(j);
+            if (c.table === "records" && !st2.records.some(r => r.id === id)) st2.records.push(obj as Rec);
+            else if (c.table === "tasks" && !st2.tasks.some(t => t.id === id)) st2.tasks.push(obj as Task);
+            else if (c.table === "activities" && !st2.activities.some(a => a.id === id)) st2.activities.push(obj as Activity);
+            else if (c.table === "chats" && !st2.chats.some(x => x.id === id)) st2.chats.push(obj as Chat);
+            else if (c.table === "reply_templates" && !st2.replyTemplates.some(t => t.id === id)) st2.replyTemplates.push(obj as ReplyTemplate);
+          }
+        });
+        toast.error(`Не удалено: ${refused.length} — чужое удаляет только владелец`, { description: "Вернул на экран. Попросите владельца пространства" });
       }
     }
     if (problems.length) throw new Error(problems.join(" · "));
+    lastSeen = Date.now();
     if (cloudBroken) { cloudBroken = false; bump(); }
   } catch (err) {
     if (!cloudBroken) { cloudBroken = true; bump(); }
@@ -643,17 +697,50 @@ function subscribeRealtime(id: string): void {
   channel.on("postgres_changes", { event: "*", schema: "public", table: "ws_config", filter: `workspace_id=eq.${id}` }, payload => {
     const row = payload.new as Row | null;
     const incE = (row?.entities as EntityCfg[] | undefined) ?? undefined;
-    if (!incE?.length) return;
+    // Чужая структура применяется только если она ПОХОЖА на структуру: битый конфиг
+    // (участник записал мусор через REST) раньше ронял приложение у всей команды при каждом входе.
+    if (!incE?.length || !incE.every(e => e && typeof e.id === "string" && Array.isArray(e.fields))) return;
     const rawA = row?.automations as AutoCol;
     const incA = colRules(rawA) ?? getState().automations;
     const incR = colRoutes(rawA) ?? getState().routes;
-    const j = canon({ e: incE, a: incA, r: incR });
-    if (j === cfgSnap) return; // эхо
+    const j = cfgCanon(incE, incA, incR);
+    if (j === cfgSnap) return; // эхо (в т.ч. чужой счётчик срабатываний)
     cfgSnap = j;
+    cfgSeen = Number(row?.updated_at ?? cfgSeen);
     applyRemote(s => { s.entities = incE; s.automations = incA; s.routes = incR; });
     toast("Структура, правила и маршруты обновлены коллегой");
   });
-  channel.subscribe();
+  // Обрыв связи (сон ноутбука, смена сети): realtime переподключается, но пропущенное за
+  // это время само не приедет — после восстановления перечитываем пространство.
+  let wasDown = false;
+  channel.subscribe(status => {
+    if (status === "SUBSCRIBED") { if (wasDown) { wasDown = false; void resync(); } return; }
+    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") wasDown = true;
+  });
+}
+
+let lastSeen = Date.now();
+let resyncing = false;
+/** Перечитать пространство после разрыва: чужие изменения — к нам, наши несохранённые — не трогаем. */
+export async function resync(): Promise<void> {
+  if (!wsId || resyncing || saving || dirtyAgain) return;
+  resyncing = true;
+  try {
+    const tables: (keyof typeof snap)[] = ["records", "tasks", "activities", "chats", "reply_templates"];
+    for (const t of tables) {
+      const { data, error } = await fetchAll(t, wsId);
+      if (error || !data) continue;
+      const alive = new Set<string>();
+      for (const row of data) { alive.add(String(row.id)); onRemote(t, "UPDATE", row); }
+      for (const id of [...snap[t].keys()]) if (!alive.has(id)) onRemote(t, "DELETE", { id });
+    }
+    lastSeen = Date.now();
+  } finally { resyncing = false; }
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && wsId && Date.now() - lastSeen > 90_000) void resync();
+  });
 }
 
 function onRemote(table: keyof typeof snap, eventType: string, row: Row): void {
@@ -676,8 +763,10 @@ function onRemote(table: keyof typeof snap, eventType: string, row: Row): void {
   if (table === "records") {
     const inc = M.records.fromRow(row);
     const local = st.records.find(r => r.id === inc.id);
-    if (local && local.updatedAt > inc.updatedAt) return;      // у нас свежее — не даём эху откатить правки
     if (snap.records.get(inc.id) === canon(inc)) return;       // эхо собственной записи
+    // У нас есть НЕСОХРАНЁННАЯ правка этой карточки — не откатываем её чужой версией: doSave
+    // сольёт по полям. Раньше сравнивали часы клиентов, и спешащие часы прятали правки коллег.
+    if (local && snap.records.get(inc.id) !== canon(local)) return;
     snap.records.set(inc.id, canon(inc));
     const isNew = !local;
     applyRemote(s => { const i = s.records.findIndex(r => r.id === inc.id); if (i >= 0) s.records[i] = inc; else s.records.push(inc); });
@@ -698,8 +787,15 @@ function onRemote(table: keyof typeof snap, eventType: string, row: Row): void {
   } else if (table === "chats") {
     const inc = M.chats.fromRow(row);
     const local = st.chats.find(c => c.id === inc.id);
-    if (local && local.msgs.length > inc.msgs.length) return;  // локально уже больше сообщений — эхо устарело
     if (snap.chats.get(inc.id) === canon(inc)) return;
+    // Переписку СЛИВАЕМ по id сообщений: сервер дописал входящее, пока менеджер набирал ответ, —
+    // раньше та версия, что пришла позже, просто затирала другую, и сообщение клиента пропадало.
+    if (local) {
+      const seen = new Map(inc.msgs.map(m => [m.id, m]));
+      for (const m of local.msgs) if (!seen.has(m.id)) seen.set(m.id, m);
+      inc.msgs = [...seen.values()].sort((a, b) => a.ts - b.ts);
+      if (local.unread > inc.unread && local.msgs.length > inc.msgs.length) inc.unread = local.unread;
+    }
     snap.chats.set(inc.id, canon(inc));
     applyRemote(s => {
       const i = s.chats.findIndex(c => c.id === inc.id);

@@ -25,7 +25,7 @@ const rnd = () => (crypto.randomUUID?.() ?? String(Math.random())).replace(/-/g,
 // секрет вебхука пространства: создаётся один раз и живёт в базе (его знает и функция, и владелец канала)
 /** Перевыпуск секрета приёмника: старый адрес перестаёт работать. Нужен, если адрес утёк —
     например, попал в репозиторий или в переписку. После этого адрес в форме надо заменить. */
-export async function rotateHookSecret(source: InboundSource): Promise<string | null> {
+export async function rotateHookSecret(source: InboundSource | "notify"): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;
   const secret = rnd();
@@ -43,7 +43,7 @@ export async function rotateHookSecret(source: InboundSource): Promise<string | 
 /** Прочитать секрет приёмника, НЕ создавая его. Нужно, чтобы показать уже настроенный
     адрес при открытии настроек: раньше он жил только в состоянии экрана и пропадал при
     уходе с него — человек оставался без адреса, который уже вставил себе на сайт. */
-export async function getHookSecret(source: InboundSource): Promise<string | null> {
+export async function getHookSecret(source: InboundSource | "notify"): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;
   const { data, error } = await supa.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", source).maybeSingle();
@@ -51,7 +51,7 @@ export async function getHookSecret(source: InboundSource): Promise<string | nul
   return String(data.secret);
 }
 
-export async function ensureHookSecret(source: InboundSource): Promise<string | null> {
+export async function ensureHookSecret(source: InboundSource | "notify"): Promise<string | null> {
   const ws = getState().wsId;
   if (!ws) return null;
   // Сорвавшийся запрос НЕ повод выписывать новый секрет: старый продолжает работать в
@@ -149,9 +149,19 @@ export async function maxUsePolling(token: string): Promise<void> {
 }
 
 // ---------- уведомления о заявках в Telegram ----------
-// Пространство сервер берёт из проверенного секретом адреса вебхука, а не отсюда:
-// раньше по такой ссылке с ЧУЖИМ id можно было подписаться на чужие заявки.
-export const notifyLink = (botName: string, ws: string) => `https://t.me/${botName.replace(/^@/, "")}?start=notify_${ws.slice(0, 8)}`;
+// Метка в ссылке — СЕКРЕТ (строка channel_hooks с source «notify», читает только владелец),
+// а не первые символы id пространства: id лежит в адресе приёмника на сайте и у каждого
+// бывшего сотрудника — по нему любой мог подписаться на все заявки. Секрет перевыпускается.
+export const notifyLink = (botName: string, secret: string) => `https://t.me/${botName.replace(/^@/, "")}?start=notify_${secret}`;
+export async function ensureNotifySecret(): Promise<string | null> { return ensureHookSecret("notify"); }
+export async function rotateNotifySecret(): Promise<string | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const secret = rnd().slice(0, 24);
+  const { error } = await supa.from("channel_hooks").upsert({ workspace_id: ws, source: "notify", secret });
+  if (error) return null;
+  return secret;
+}
 export async function notifyTargets(): Promise<{ chat_id: string; name: string | null }[]> {
   const ws = getState().wsId;
   if (!ws) return [];

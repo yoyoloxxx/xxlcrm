@@ -1,7 +1,8 @@
 // Живые автоматизации: правила «когда → тогда» для любых разделов конструктора
 import { useState } from "react";
-import type { Rule, RuleTrigger, TaskKind } from "@/lib/model";
-import { useApp, A, allEntities, ruleIssue, resolveRoute, userName } from "@/lib/store";
+import type { Field, Rule, RuleAction, RuleTrigger, TaskKind } from "@/lib/model";
+import { useApp, A, allEntities, getState, resolveRoute, userName } from "@/lib/store";
+import { ruleProblem } from "@/lib/automations";
 import { SOURCES, sourceName, plural } from "@/lib/model";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,8 @@ import { AlertTriangle, ArrowRight, Pencil, Plus, Route as RouteIcon, Trash2, Za
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<TaskKind, string> = { call: "звонок", meet: "встреча", todo: "сделать", msg: "написать" };
+const ANY_STAGE = "any"; // значение Select «любая стадия» (Radix не принимает пустую строку)
+const isDateField = (f: Field) => f.type === "date" || f.type === "datetime";
 
 function entName(id: string): string {
   return allEntities().find(e => e.id === id)?.namePlural ?? "удалённый раздел";
@@ -21,46 +24,93 @@ function stageName(entityId: string, stageId: string): string {
   if (stageId === "kind:lost") return "любую провальную";
   return allEntities().find(e => e.id === entityId)?.stages?.find(s => s.id === stageId)?.label ?? "стадию";
 }
+function fieldName(entityId: string, fieldId: string): string {
+  return allEntities().find(e => e.id === entityId)?.fields.find(f => f.id === fieldId)?.label ?? "удалённое поле";
+}
+function tplName(id: string): string {
+  return getState().replyTemplates.find(t => t.id === id)?.name ?? "удалённый шаблон";
+}
 function triggerText(t: RuleTrigger): string {
   switch (t.type) {
     case "record_created": return `Создана запись в «${entName(t.entityId)}»`;
     case "stage_enter": return `Запись в «${entName(t.entityId)}» попала на ${stageName(t.entityId, t.stageId)} стадию`;
-    case "stage_stuck": return `Запись в «${entName(t.entityId)}» стоит на стадии дольше ${t.days} дн.`;
+    case "stage_stuck": return `Запись в «${entName(t.entityId)}» стоит ${t.stageId ? `на стадии «${stageName(t.entityId, t.stageId)}»` : "на любой стадии"} дольше ${t.days} дн.`;
     case "quiet": return `По записи в «${entName(t.entityId)}» тишина дольше ${t.days} дн.`;
+    case "unanswered": return `Клиент по записи в «${entName(t.entityId)}» ждёт ответа дольше ${t.hours} ч.`;
+    case "date_before": return `За ${t.days} дн. до даты «${fieldName(t.entityId, t.fieldId)}» в «${entName(t.entityId)}»`;
   }
 }
-function actionText(r: Rule): string {
-  const h = r.action.afterHours;
-  const when = h === 0 ? "сразу" : h < 24 ? `через ${h} ч.` : `через ${Math.round(h / 24)} дн.`;
-  return `задача «${r.action.title}» (${KIND_LABEL[r.action.kind]}, ${when})`;
+function whenText(h: number): string {
+  if (h === 0) return "сразу";
+  if (h < 1) return `через ${Math.round(h * 60)} мин.`;
+  if (h < 24) return `через ${h} ч.`;
+  return `через ${Math.round(h / 24)} дн.`;
 }
-const ruleBroken = (r: Rule) => ruleIssue(r);
+function actionText(r: Rule): string {
+  const a = r.action;
+  if (a.type === "message") return `написать клиенту по шаблону «${tplName(a.templateId)}» (${whenText(a.afterHours ?? 0)})`;
+  return `задача «${a.title}» (${KIND_LABEL[a.kind]}, ${whenText(a.afterHours)})`;
+}
+const ruleBroken = (r: Rule) => ruleProblem(r);
+const num = (v: string, def: number, min: number) => { const n = Number(v); return Math.max(min, isFinite(n) && v.trim() !== "" ? n : def); };
 
 function RuleDialog({ rule, open, onClose }: { rule: Rule | null; open: boolean; onClose: () => void }) {
+  const s = useApp();
   const ents = allEntities();
   const [name, setName] = useState(rule?.name ?? "");
   const [trigType, setTrigType] = useState<RuleTrigger["type"]>(rule?.trigger.type ?? "record_created");
   const [entityId, setEntityId] = useState(rule?.trigger.entityId ?? ents[0]?.id ?? "");
   const [stageId, setStageId] = useState(rule?.trigger.type === "stage_enter" ? rule.trigger.stageId : "kind:won");
+  const [stuckStage, setStuckStage] = useState(rule?.trigger.type === "stage_stuck" ? (rule.trigger.stageId ?? ANY_STAGE) : ANY_STAGE);
+  const [fieldId, setFieldId] = useState(rule?.trigger.type === "date_before" ? rule.trigger.fieldId : "");
   const [days, setDays] = useState(String(rule && "days" in rule.trigger ? rule.trigger.days : 3));
-  const [title, setTitle] = useState(rule?.action.title ?? "");
-  const [kind, setKind] = useState<TaskKind>(rule?.action.kind ?? "todo");
-  const [after, setAfter] = useState(String(rule?.action.afterHours ?? 1));
+  const [hours, setHours] = useState(String(rule?.trigger.type === "unanswered" ? rule.trigger.hours : 2));
+  const [actType, setActType] = useState<RuleAction["type"]>(rule?.action.type ?? "task");
+  const [title, setTitle] = useState(rule?.action.type === "task" ? rule.action.title : "");
+  const [kind, setKind] = useState<TaskKind>(rule?.action.type === "task" ? rule.action.kind : "todo");
+  const [templateId, setTemplateId] = useState(rule?.action.type === "message" ? rule.action.templateId : "");
+  const [after, setAfter] = useState(String(rule?.action.afterHours ?? (rule?.action.type === "message" ? 0 : 1)));
   const ent = ents.find(e => e.id === entityId);
+  // Сменили раздел — стадия/поле прошлого раздела не должны уехать в правило молча
+  const enterSel = stageId.startsWith("kind:") || ent?.stages?.some(x => x.id === stageId) ? stageId : "kind:won";
+  const stuckSel = ent?.stages?.some(x => x.id === stuckStage) ? stuckStage : ANY_STAGE;
+  const dateFields = ent?.fields.filter(isDateField) ?? [];
+  const fieldSel = dateFields.some(f => f.id === fieldId) ? fieldId : (dateFields[0]?.id ?? "");
+  const tplSel = s.replyTemplates.some(t => t.id === templateId) ? templateId : (s.replyTemplates[0]?.id ?? "");
+  const tpl = s.replyTemplates.find(t => t.id === tplSel);
+  const canSave = (actType === "task" ? !!title.trim() : !!tplSel) && (trigType !== "date_before" || !!fieldSel);
 
   const save = () => {
-    if (!title.trim()) return;
+    if (!canSave) return;
     const trigger: RuleTrigger =
       trigType === "record_created" ? { type: "record_created", entityId }
-      : trigType === "stage_enter" ? { type: "stage_enter", entityId, stageId }
-      : trigType === "stage_stuck" ? { type: "stage_stuck", entityId, days: Math.max(1, Number(days) || 3) }
-      : { type: "quiet", entityId, days: Math.max(1, Number(days) || 30) };
-    const action = { type: "task" as const, title: title.trim(), kind, afterHours: Math.max(0, Number(after) || 0) };
+      : trigType === "stage_enter" ? { type: "stage_enter", entityId, stageId: enterSel }
+      : trigType === "stage_stuck" ? { type: "stage_stuck", entityId, days: num(days, 3, 1), ...(stuckSel !== ANY_STAGE ? { stageId: stuckSel } : {}) }
+      : trigType === "quiet" ? { type: "quiet", entityId, days: num(days, 30, 1) }
+      : trigType === "unanswered" ? { type: "unanswered", entityId, hours: num(hours, 2, 0) }
+      : { type: "date_before", entityId, fieldId: fieldSel, days: num(days, 3, 0) };
+    const afterHours = num(after, 0, 0);
+    const action: RuleAction = actType === "task"
+      ? { type: "task", title: title.trim(), kind, afterHours }
+      : { type: "message", templateId: tplSel, afterHours };
     const ruleName = name.trim() || triggerText(trigger);
     if (rule) A.ruleUpdate(rule.id, { name: ruleName, trigger, action });
     else A.ruleAdd({ name: ruleName, enabled: true, trigger, action });
     onClose();
   };
+
+  const pick = (v: RuleAction["type"]) => {
+    setActType(v);
+    // письмо по умолчанию уходит сразу, задача — через час: срок, который не трогали, подстраиваем под режим
+    if (!rule) setAfter(a => (v === "message" && a === "1" ? "0" : v === "task" && a === "0" ? "1" : a));
+  };
+  const seg = (v: RuleAction["type"], label: string) => (
+    <button type="button" role="radio" aria-checked={actType === v} onClick={() => pick(v)}
+      className={cn("press h-8 rounded-[5px] text-[12.5px] transition-colors", actType === v ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>
+      {label}
+    </button>
+  );
+  const whenPrefix = actType === "task" ? "срок" : "отправить";
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
@@ -72,24 +122,26 @@ function RuleDialog({ rule, open, onClose }: { rule: Rule | null; open: boolean;
             <div className="eyebrow mb-1.5">Когда</div>
             <div className="flex flex-col gap-2">
               <Select value={trigType} onValueChange={v => setTrigType(v as RuleTrigger["type"])}>
-                <SelectTrigger className="h-9 text-[12.5px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 text-[12.5px]" aria-label="Событие"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="record_created">Создана запись</SelectItem>
                   <SelectItem value="stage_enter">Запись попала на стадию</SelectItem>
                   <SelectItem value="stage_stuck">Запись застряла на стадии</SelectItem>
                   <SelectItem value="quiet">По записи тишина N дней</SelectItem>
+                  <SelectItem value="unanswered">Клиент ждёт ответа N часов</SelectItem>
+                  <SelectItem value="date_before">За N дней до даты в поле</SelectItem>
                 </SelectContent>
               </Select>
               <div className="flex gap-2">
                 <Select value={entityId} onValueChange={setEntityId}>
-                  <SelectTrigger className="h-9 flex-1 text-[12.5px]"><SelectValue placeholder="Раздел" /></SelectTrigger>
+                  <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Раздел"><SelectValue placeholder="Раздел" /></SelectTrigger>
                   <SelectContent>
                     {ents.map(e => <SelectItem key={e.id} value={e.id}>{e.namePlural}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 {trigType === "stage_enter" && (
-                  <Select value={stageId} onValueChange={setStageId}>
-                    <SelectTrigger className="h-9 flex-1 text-[12.5px]"><SelectValue /></SelectTrigger>
+                  <Select value={enterSel} onValueChange={setStageId}>
+                    <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Стадия"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="kind:won">Любая успешная ✓</SelectItem>
                       <SelectItem value="kind:lost">Любая провальная ✕</SelectItem>
@@ -97,49 +149,108 @@ function RuleDialog({ rule, open, onClose }: { rule: Rule | null; open: boolean;
                     </SelectContent>
                   </Select>
                 )}
-                {(trigType === "stage_stuck" || trigType === "quiet") && (
+                {trigType === "stage_stuck" && (
+                  <Select value={stuckSel} onValueChange={setStuckStage}>
+                    <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Стадия"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ANY_STAGE}>Любая стадия</SelectItem>
+                      {ent?.stages?.filter(st => st.kind === "open").map(st => <SelectItem key={st.id} value={st.id}>{st.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+                {trigType === "date_before" && (
+                  <Select value={fieldSel} onValueChange={setFieldId}>
+                    <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Поле-дата"><SelectValue placeholder="Поле-дата" /></SelectTrigger>
+                    <SelectContent>
+                      {dateFields.map(f => <SelectItem key={f.id} value={f.id}>{f.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                )}
+                {(trigType === "stage_stuck" || trigType === "quiet" || trigType === "date_before") && (
                   <div className="flex items-center gap-1.5">
-                    <Input className="h-9 w-16 text-center text-[12.5px] tnum" type="number" min={1} value={days} onChange={e => setDays(e.target.value)} />
-                    <span className="text-[12px] text-muted-foreground">дн.</span>
+                    <Input className="h-9 w-16 text-center text-[12.5px] tnum" type="number" min={trigType === "date_before" ? 0 : 1} aria-label="Дней" value={days} onChange={e => setDays(e.target.value)} />
+                    <span className="whitespace-nowrap text-[12px] text-muted-foreground">{trigType === "date_before" ? "дн. до" : "дн."}</span>
+                  </div>
+                )}
+                {trigType === "unanswered" && (
+                  <div className="flex items-center gap-1.5">
+                    <Input className="h-9 w-16 text-center text-[12.5px] tnum" type="number" min={0} aria-label="Часов" value={hours} onChange={e => setHours(e.target.value)} />
+                    <span className="text-[12px] text-muted-foreground">ч.</span>
                   </div>
                 )}
               </div>
+              {trigType === "date_before" && !dateFields.length && (
+                <p className="text-[11.5px] leading-snug text-destructive">В разделе нет поля с датой — добавьте его в конструкторе.</p>
+              )}
+              {trigType === "unanswered" && (
+                <p className="text-[11px] leading-snug text-muted-foreground">Считаются настоящие диалоги подключённых каналов, привязанные к записи: последнее сообщение — от клиента, и оно ждёт дольше указанного.</p>
+              )}
             </div>
           </div>
           <div>
-            <div className="eyebrow mb-1.5">Тогда — создать задачу</div>
-            <div className="flex flex-col gap-2">
-              <Input className="h-9 text-[13px]" placeholder="Текст задачи, например: Связаться с клиентом" value={title} onChange={e => setTitle(e.target.value)} />
-              <div className="flex gap-2">
-                <Select value={kind} onValueChange={v => setKind(v as TaskKind)}>
-                  <SelectTrigger className="h-9 flex-1 text-[12.5px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="call">Звонок</SelectItem>
-                    <SelectItem value="msg">Написать</SelectItem>
-                    <SelectItem value="meet">Встреча</SelectItem>
-                    <SelectItem value="todo">Сделать</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={after} onValueChange={setAfter}>
-                  <SelectTrigger className="h-9 flex-1 text-[12.5px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="0">срок: сразу</SelectItem>
-                    <SelectItem value="1">срок: через час</SelectItem>
-                    <SelectItem value="3">срок: через 3 часа</SelectItem>
-                    <SelectItem value="24">срок: завтра</SelectItem>
-                    <SelectItem value="72">срок: через 3 дня</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="eyebrow mb-1.5">Тогда</div>
+            <div className="mb-2 grid grid-cols-2 gap-0.5 rounded-md border p-0.5" role="radiogroup" aria-label="Что сделать">
+              {seg("task", "Поставить задачу")}
+              {seg("message", "Написать клиенту")}
             </div>
+            {actType === "task" ? (
+              <div className="flex flex-col gap-2">
+                <Input className="h-9 text-[13px]" placeholder="Текст задачи, например: Связаться с клиентом" value={title} onChange={e => setTitle(e.target.value)} />
+                <div className="flex gap-2">
+                  <Select value={kind} onValueChange={v => setKind(v as TaskKind)}>
+                    <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Тип задачи"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="call">Звонок</SelectItem>
+                      <SelectItem value="msg">Написать</SelectItem>
+                      <SelectItem value="meet">Встреча</SelectItem>
+                      <SelectItem value="todo">Сделать</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <WhenSelect value={after} onChange={setAfter} prefix={whenPrefix} />
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <Select value={tplSel} onValueChange={setTemplateId}>
+                    <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Шаблон сообщения"><SelectValue placeholder="Шаблон ответа" /></SelectTrigger>
+                    <SelectContent>
+                      {s.replyTemplates.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <WhenSelect value={after} onChange={setAfter} prefix={whenPrefix} />
+                </div>
+                {tpl
+                  ? <div className="rounded-md bg-muted/70 px-2.5 py-1.5 text-[11.5px] leading-snug text-muted-foreground">{tpl.text}</div>
+                  : <p className="text-[11.5px] leading-snug text-destructive">Шаблонов ответа нет — добавьте в Настройках.</p>}
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Уйдёт в диалог клиента в подключённом канале (Telegram, WhatsApp, MAX) в рабочее время 9–22; переменные подставятся из записи.
+                  Нет диалога или канала — вместо письма встанет задача «Написать клиенту».
+                </p>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <Button className="h-10 flex-1" onClick={save} disabled={!title.trim()}>Сохранить правило</Button>
+            <Button className="h-10 flex-1" onClick={save} disabled={!canSave}>Сохранить правило</Button>
             <Button variant="outline" className="h-10" onClick={onClose}>Отмена</Button>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function WhenSelect({ value, onChange, prefix }: { value: string; onChange: (v: string) => void; prefix: string }) {
+  const opts: [string, string][] = [["0", "сразу"], ["0.25", "через 15 минут"], ["1", "через час"], ["3", "через 3 часа"], ["24", "завтра"], ["72", "через 3 дня"]];
+  const known = opts.some(([v]) => v === value);
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-9 flex-1 text-[12.5px]" aria-label="Когда"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {!known && <SelectItem value={value}>{prefix}: {whenText(Number(value) || 0)}</SelectItem>}
+        {opts.map(([v, l]) => <SelectItem key={v} value={v}>{prefix}: {l}</SelectItem>)}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -218,7 +329,8 @@ export function AutomationsLive() {
       </div>
 
       <p className="mt-3 text-[11.5px] leading-snug text-muted-foreground">
-        Правила работают с любыми разделами конструктора. Задача достаётся ответственному за запись; проверка «застряла» и «тишина» — раз в час. Дубли исключены: одно событие — одна задача, даже в команде.
+        Правила работают с любыми разделами конструктора. Задача достаётся ответственному за запись; «застряла», «тишина», «ждёт ответа» и «за N дней до даты» проверяются раз в час.
+        Сообщение клиенту уходит по шаблону в настоящий диалог подключённого канала — только в рабочее время; нет диалога — встанет задача «Написать клиенту». Дубли исключены: одно событие — одна задача или одно письмо, даже в команде.
       </p>
 
       {(adding || editing) && <RuleDialog rule={editing} open onClose={() => { setAdding(false); setEditing(null); }} />}

@@ -1,15 +1,15 @@
 // Живая таблица: inline-редактирование, сортировка, быстрое добавление, суммы
 import { useState } from "react";
 import type { EntityCfg, Field, Rec } from "@/lib/model";
-import { displayValue, fmtMoney } from "@/lib/model";
+import { displayValue, fmtMoney, plural, asBool, asList, selectedOptionIds, uid } from "@/lib/model";
 import { A, recordsOf, recTitle, openTasksFor, dispCtx, entityCfg, allUsers } from "@/lib/store";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FIELD_TYPES } from "@/lib/model";
-import { FieldInput } from "./FieldInput";
+import { FIELD_TYPES, PALETTE } from "@/lib/model";
+import { FieldInput, PhoneLinks } from "./FieldInput";
 import { Pill, UserChip } from "./bits";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowDown, ArrowUp, Download, ListChecks, Maximize2, Plus, Trash2, X } from "lucide-react";
@@ -24,6 +24,7 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
   const [limit, setLimit] = useState(200);
   const [sel, setSel] = useState<Set<string>>(new Set());     // массовые действия: что выделено
   const [bulkTask, setBulkTask] = useState("");
+  const [armDel, setArmDel] = useState(false);
   const [newField, setNewField] = useState({ label: "", type: "text" });
 
   const cols = e.fields.filter(f => f.id !== e.titleFieldId && f.inTable !== false);
@@ -91,10 +92,19 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
           onClick={() => downloadCSV(e.namePlural + "_выбранное", toCSV(e, sorted.filter(r => sel.has(r.id)), dispCtx()))}>
           <Download className="size-3.5" /> Выгрузить выбранные
         </Button>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 border-destructive/40 text-[12px] text-destructive hover:bg-destructive/5"
-          onClick={() => { A.bulkDelete(ids); setSel(new Set()); }}>
-          <Trash2 className="size-3.5" /> Удалить
-        </Button>
+        {/* Массовое удаление — двухшаговое, как у поля и стадии: один клик мог унести всю базу */}
+        {!armDel ? (
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 border-destructive/40 text-[12px] text-destructive hover:bg-destructive/5"
+            onClick={() => setArmDel(true)}>
+            <Trash2 className="size-3.5" /> Удалить
+          </Button>
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-[11.5px] text-destructive">Удалить {ids.length} {plural(ids.length, "запись", "записи", "записей")}? Ctrl+Z вернёт.</span>
+            <Button size="sm" className="h-7 text-[11.5px]" onClick={() => { A.bulkDelete(ids); setSel(new Set()); setArmDel(false); }}>да, удалить</Button>
+            <Button variant="outline" size="sm" className="h-7 text-[11.5px]" onClick={() => setArmDel(false)}>нет</Button>
+          </span>
+        )}
         <button onClick={() => setSel(new Set())} className="press ml-auto inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground">
           <X className="size-3.5" /> снять выделение
         </button>
@@ -127,7 +137,14 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
                   <SelectContent>{FIELD_TYPES.filter(t => t.type !== "relation").map(t => <SelectItem key={t.type} value={t.type}>{t.label}</SelectItem>)}</SelectContent>
                 </Select>
                 <Button className="mt-2 h-8 w-full text-[12.5px]" disabled={!newField.label.trim()}
-                  onClick={() => { A.fieldAdd(e.id, { label: newField.label.trim(), type: newField.type as Field["type"], inTable: true }); setNewField({ label: "", type: "text" }); }}>
+                  onClick={() => {
+                    const type = newField.type as Field["type"];
+                    // список без вариантов бесполезен — даём два стартовых, переименуют в конструкторе
+                    const options = type === "select" || type === "multiselect"
+                      ? ["Вариант 1", "Вариант 2"].map((l, i) => ({ id: uid("o"), label: l, color: PALETTE[i % PALETTE.length] })) : undefined;
+                    A.fieldAdd(e.id, { label: newField.label.trim(), type, inTable: true, ...(options ? { options } : {}) });
+                    setNewField({ label: "", type: "text" });
+                  }}>
                   Добавить
                 </Button>
               </PopoverContent>
@@ -159,12 +176,14 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
             )}
             {cols.map(f => {
               const isEd = editing?.rec === r.id && editing.field === f.id;
+              // «Да/нет» переключается прямо в ячейке — отдельный редактор ему не нужен
+              const inline = f.type === "checkbox";
               return (
-                <td key={f.id} className="max-w-56 border-b px-2 py-1" onClick={() => !isEd && setEditing({ rec: r.id, field: f.id })}>
+                <td key={f.id} className="max-w-56 border-b px-2 py-1" onClick={() => !isEd && !inline && setEditing({ rec: r.id, field: f.id })}>
                   {isEd ? (
                     <div className="min-w-36"><FieldInput field={f} value={r.values[f.id]} autoFocus onChange={v => A.setValue(r.id, f, v)} onDone={() => setEditing(null)} /></div>
                   ) : (
-                    <div className={cn("cell-editable truncate px-1.5 py-1", ["money", "number"].includes(f.type) && "font-mono2 tnum")}>
+                    <div className={cn("cell-editable px-1.5 py-1", f.type === "multiselect" ? "flex flex-wrap gap-1" : "truncate", ["money", "number"].includes(f.type) && "font-mono2 tnum")}>
                       <CellDisplay f={f} r={r} />
                     </div>
                   )}
@@ -230,9 +249,33 @@ export function TableLive({ entity: e, filter }: { entity: EntityCfg; filter?: (
 function CellDisplay({ f, r }: { f: Field; r: Rec }) {
   const v = r.values[f.id];
   if (f.type === "select") { const o = f.options?.find(x => x.id === v); return o ? <Pill o={o} small /> : <span className="text-muted-foreground/60">—</span>; }
+  if (f.type === "checkbox") {
+    // один клик по галочке — и значение сменилось; редактор ячейки для этого не открываем
+    const on = asBool(v);
+    return (
+      <span className="inline-flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+        <Checkbox checked={on} aria-label={`${f.label}: ${on ? "да" : "нет"}`} onCheckedChange={c => A.setValue(r.id, f, !!c)} />
+        <span className={cn("text-[12px]", !on && "text-muted-foreground")}>{on ? "Да" : "Нет"}</span>
+      </span>
+    );
+  }
+  if (f.type === "multiselect") {
+    const opts = f.options ?? [];
+    const ids = selectedOptionIds(f, v);
+    // токены из импорта, которых нет среди вариантов, показываем текстом — не теряем молча
+    const strange = asList(v).filter(t => !opts.some(o => o.id === t || o.label.toLowerCase() === t.toLowerCase()));
+    if (!ids.length && !strange.length) return <span className="text-muted-foreground/60">—</span>;
+    return (
+      <>
+        {ids.map(id => { const o = opts.find(x => x.id === id); return o ? <Pill key={id} o={o} small /> : null; })}
+        {strange.map(t => <span key={"?" + t} className="text-[11px] text-muted-foreground" title="Такого варианта нет в списке">{t}</span>)}
+      </>
+    );
+  }
   const text = displayValue(f, v, dispCtx());
   if (!text) return <span className="text-muted-foreground/60">—</span>;
   if (f.type === "url") return <a href={/^https?:/.test(String(v)) ? String(v) : "https://" + String(v)} target="_blank" rel="noreferrer" style={{ color: "var(--brass-ink)" }} className="hover:underline" onClick={e => e.stopPropagation()}>{text.replace(/^https?:\/\//, "")}</a>;
+  if (f.type === "phone") return <span className="inline-flex max-w-full items-center gap-1"><span className="truncate">{text}</span><PhoneLinks value={v} /></span>;
   return <>{text}</>;
 }
 

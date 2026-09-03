@@ -22,10 +22,39 @@ export function fmtRuTime(ts?: unknown): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** Строка (как человек её набрал) → метка времени. null — не разобрал. */
-export function parseRuDate(raw: string, base = new Date()): number | null {
-  const s = raw.trim().toLowerCase().replace(/\s+/g, " ");
+/** Строка (как человек её набрал) → метка времени. null — не разобрал.
+    Выгрузки из amoCRM/Битрикс24/Excel пишут дату со временем: «12.03.2025 14:22», «2025-03-12 14:22:10»,
+    ISO «2025-03-12T14:22:10Z». Такие строки тоже понимаем: по умолчанию отдаём ПОЛДЕНЬ дня (поле «дата»),
+    а с withTime — точное время (поле «дата и время», «создано в старой CRM»). */
+export function parseRuDate(raw: string, base = new Date(), withTime = false): number | null {
+  let s = raw.trim().toLowerCase().replace(/\s+/g, " ");
   if (!s) return null;
+  let time: { h: number; m: number; sec: number } | null = null;
+  // ISO с буквой T: «2025-03-12t14:22:10.000z», «2025-03-12t14:22+03:00»
+  const iso = /^(\d{4}-\d{1,2}-\d{1,2})t(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(z|[+-]\d{2}:?\d{2})?$/.exec(s);
+  if (iso) {
+    if (iso[5]) {
+      // есть зона — это точный момент, переводим в местное время браузера
+      const d = new Date(raw.trim());
+      if (isNaN(d.getTime())) return null;
+      return withTime ? d.getTime() : startOfDay(d);
+    }
+    s = iso[1];
+    time = { h: Number(iso[2]), m: Number(iso[3]), sec: Number(iso[4] ?? 0) };
+  } else {
+    // «12.03.2025 14:22», «12.03.2025, 14:22:10», «сегодня 18:00», «31 декабря 09:30»
+    const m = /^(.+?)[ ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+    if (m) { s = m[1]; time = { h: Number(m[2]), m: Number(m[3]), sec: Number(m[4] ?? 0) }; }
+  }
+  if (time && (time.h > 23 || time.m > 59 || time.sec > 59)) return null;
+  const dayTs = parseRuDay(s, base);
+  if (dayTs === null || !withTime || !time) return dayTs;
+  const d = new Date(dayTs);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), time.h, time.m, time.sec).getTime();
+}
+
+/** Только день (без времени) — вся прежняя логика разбора «по-человечески». Уже в нижнем регистре. */
+function parseRuDay(s: string, base: Date): number | null {
   const day = (off: number) => startOfDay(new Date(base.getFullYear(), base.getMonth(), base.getDate() + off));
 
   if (/^сегодня$/.test(s)) return day(0);

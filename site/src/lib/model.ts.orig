@@ -1,5 +1,5 @@
 // XXLcrm site — модель данных живой части (порт из прототипа, обрезан до шага 1)
-export type FieldType = "text" | "textarea" | "number" | "money" | "phone" | "email" | "url" | "date" | "datetime" | "select" | "multiselect" | "checkbox" | "relation" | "user";
+export type FieldType = "text" | "textarea" | "number" | "money" | "phone" | "email" | "url" | "date" | "datetime" | "select" | "relation" | "user";
 
 export interface Option { id: string; label: string; color: string }
 export interface Field { id: string; label: string; type: FieldType; options?: Option[]; relationTo?: string; required?: boolean; inTable?: boolean }
@@ -88,8 +88,6 @@ export const FIELD_TYPES: { type: FieldType; label: string; group: string }[] = 
   { type: "date", label: "Дата", group: "Время" },
   { type: "datetime", label: "Дата и время", group: "Время" },
   { type: "select", label: "Список (выбор)", group: "Выбор" },
-  { type: "multiselect", label: "Несколько из списка", group: "Выбор" },
-  { type: "checkbox", label: "Да/нет", group: "Выбор" },
   { type: "user", label: "Сотрудник", group: "Связи" },
   { type: "relation", label: "Связь с разделом", group: "Связи" },
 ];
@@ -161,32 +159,6 @@ export const plural = (n: number, one: string, few: string, many: string) => {
   return many;
 };
 
-// «Да/нет» хранится булевым, но из файла приходит текстом («да», «1», «true», «+») —
-// читаем снисходительно, а пишем при первом же клике честный boolean.
-export function asBool(v: unknown): boolean {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  if (typeof v === "string") return /^(да|yes|true|1|\+|y|д|ok|есть)$/i.test(v.trim());
-  return false;
-}
-// «Несколько из списка» хранится массивом id вариантов. Строка «Опт, Розница» из импорта
-// режется по «,» / «;» и сопоставляется с вариантами по id или по подписи.
-export function asList(v: unknown): string[] {
-  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string" && x !== "");
-  if (typeof v === "string") return v.split(/\s*[,;]\s*/).map(s => s.trim()).filter(Boolean);
-  return [];
-}
-/** id выбранных вариантов multiselect (неизвестные подписи из импорта отбрасываются). */
-export function selectedOptionIds(f: Field, v: unknown): string[] {
-  const opts = f.options ?? [];
-  const out: string[] = [];
-  for (const t of asList(v)) {
-    const o = opts.find(x => x.id === t) ?? opts.find(x => x.label.toLowerCase() === t.toLowerCase());
-    if (o && !out.includes(o.id)) out.push(o.id);
-  }
-  return out;
-}
-
 export function displayValue(f: Field, v: unknown, ctx?: { recTitle?: (id: string) => string; userName?: (id: string) => string }): string {
   if (v === undefined || v === null || v === "") return "";
   switch (f.type) {
@@ -194,12 +166,6 @@ export function displayValue(f: Field, v: unknown, ctx?: { recTitle?: (id: strin
     case "date": return fmtDate(v as number);
     case "datetime": return fmtDateTime(v as number);
     case "select": return f.options?.find(o => o.id === v)?.label ?? "";
-    case "multiselect": {
-      const opts = f.options ?? [];
-      // подпись варианта; токен, которого нет среди вариантов (импорт), показываем как есть
-      return asList(v).map(t => opts.find(o => o.id === t)?.label ?? opts.find(o => o.label.toLowerCase() === t.toLowerCase())?.label ?? t).join(", ");
-    }
-    case "checkbox": return asBool(v) ? "Да" : "Нет";
     case "relation": return ctx?.recTitle?.(v as string) ?? "";
     case "user": return ctx?.userName?.(v as string) ?? "";
     default: return String(v);

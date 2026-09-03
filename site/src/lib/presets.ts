@@ -2,7 +2,8 @@
 // Каждый пресет переопределяет два базовых раздела (deals + contacts — id СОХРАНЯЕМ, от них зависят
 // дедуп по телефону, привязка диалогов, связки записей), задаёт воронку, автоматизации и демо-данные.
 import type { EntityCfg, Field, Option, Rec, Rule, Task, Activity, Chat, Channel, Stage } from "./model";
-import { uid, days, now } from "./model";
+import { uid, days, now, defaultRules } from "./model";
+import { ENTITIES } from "./data";
 
 const opt = (label: string, color: string): Option => ({ id: "o_" + label.toLowerCase().replace(/[^a-zа-яё0-9]/g, ""), label, color });
 const f = (id: string, label: string, type: Field["type"], extra: Partial<Field> = {}): Field => ({ id, label, type, inTable: true, ...extra });
@@ -44,6 +45,19 @@ export interface Preset {
 const JEWELRY_DELIVERY = [opt("Собираем", "#8A8578"), opt("Передан в СДЭК", "#BC9F5C"), opt("В пути", "#6E8B8A"), opt("Доставлен", "#6E8B4F")];
 
 export const PRESETS: Preset[] = [
+  // «Своя ниша»: базовые Сделки + Клиенты без единого примера — для тех, кому чужие
+  // сделки в воронке мешают больше, чем помогают. Структура та же, что при первом запуске.
+  {
+    id: "universal",
+    label: "Своя ниша",
+    tagline: "Сделки + Клиенты с нуля: без примеров, поля и стадии настроите под себя",
+    emoji: "🧭",
+    accent: "#BC9F5C",
+    entities: ENTITIES,
+    rules: defaultRules().map(r => ({ name: r.name, enabled: r.enabled, trigger: r.trigger, action: r.action })),
+    clients: [],
+    deals: [],
+  },
   {
     id: "jewelry",
     label: "Магазин украшений",
@@ -77,9 +91,13 @@ export const PRESETS: Preset[] = [
       { name: "Новая заявка → ответить за 15 минут", enabled: true, trigger: { type: "record_created", entityId: "deals" }, action: { type: "task", title: "Ответить клиенту (за 15 минут)", kind: "msg", afterHours: 0.25 } },
       { name: "Перешёл в «Оплату» → прислать реквизиты", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "jw_pay" }, action: { type: "task", title: "Прислать реквизиты / QR для оплаты", kind: "msg", afterHours: 0 } },
       { name: "Перешёл в «Отправку» → оформить СДЭК", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "jw_ship" }, action: { type: "task", title: "Оформить СДЭК и вписать трек", kind: "todo", afterHours: 0 } },
-      { name: "Завис в «Согласовании» 2 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 2 }, action: { type: "task", title: "Согласование затянулось — мягко напомнить", kind: "msg", afterHours: 2 } },
+      { name: "Завис в «Согласовании» 2 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 2, stageId: "jw_agree" }, action: { type: "task", title: "Согласование затянулось — мягко напомнить", kind: "msg", afterHours: 2 } },
       { name: "Получен → отзыв, фото и допродажа", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "jw_won" }, action: { type: "task", title: "Попросить отзыв и фото, предложить парное изделие", kind: "msg", afterHours: 24 } },
       { name: "Тишина 45 дней → показать новинку", enabled: true, trigger: { type: "quiet", entityId: "deals", days: 45 }, action: { type: "task", title: "Давно не общались — показать новинку", kind: "msg", afterHours: 1 } },
+      { name: "Клиент ждёт ответа 1 час → ответить", enabled: true, trigger: { type: "unanswered", entityId: "deals", hours: 1 }, action: { type: "task", title: "Ответить клиенту — ждёт больше часа", kind: "msg", afterHours: 0 } },
+      { name: "За 3 дня до «К дате» → проверить, успеваем ли", enabled: true, trigger: { type: "date_before", entityId: "deals", fieldId: "giftdate", days: 3 }, action: { type: "task", title: "Проверить готовность к дате и предупредить клиента о сроках", kind: "todo", afterHours: 0 } },
+      // пример письма клиенту: включите, когда подключён канал (без трека в карточке встанет задача «Написать клиенту»)
+      { name: "Отправка → прислать трек по шаблону", enabled: false, trigger: { type: "stage_enter", entityId: "deals", stageId: "jw_ship" }, action: { type: "message", templateId: "tpl_track", afterHours: 0 } },
     ],
     clients: [
       { key: "olya", name: "Ольга Мельникова", phone: "+7 916 220-14-58", channel: "Instagram", wishes: "Размер кольца 16.5, любит серебро и лунный камень", bday: [4, 12, 33] },
@@ -130,6 +148,8 @@ export const PRESETS: Preset[] = [
       { name: "Новая запись → подтвердить", enabled: true, trigger: { type: "record_created", entityId: "deals" }, action: { type: "task", title: "Подтвердить запись с клиентом", kind: "call", afterHours: 0.25 } },
       { name: "Выполнено → записать на следующий визит", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "bs_done" }, action: { type: "task", title: "Записать на следующий визит", kind: "msg", afterHours: 1 } },
       { name: "Тишина 30 дней → пора подстричься", enabled: true, trigger: { type: "quiet", entityId: "deals", days: 30 }, action: { type: "task", title: "Напомнить: пора подстричься", kind: "msg", afterHours: 1 } },
+      { name: "За день до визита → напомнить клиенту", enabled: true, trigger: { type: "date_before", entityId: "deals", fieldId: "when", days: 1 }, action: { type: "task", title: "Напомнить клиенту о записи", kind: "msg", afterHours: 0 } },
+      { name: "Клиент ждёт ответа 1 час → ответить", enabled: true, trigger: { type: "unanswered", entityId: "deals", hours: 1 }, action: { type: "task", title: "Ответить клиенту — ждёт больше часа", kind: "msg", afterHours: 0 } },
     ],
     clients: [
       { key: "kirill", name: "Кирилл Дёмин", phone: "+7 915 330-21-04", channel: "Telegram", wishes: "Фейд по бокам, мастер — Артём" },
@@ -173,7 +193,8 @@ export const PRESETS: Preset[] = [
     rules: [
       { name: "Новый лид → ответить за 15 минут", enabled: true, trigger: { type: "record_created", entityId: "deals" }, action: { type: "task", title: "Ответить лиду (первый касается — тот и берёт)", kind: "msg", afterHours: 0.25 } },
       { name: "Бриф прошёл → отправить КП за день", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_kp" }, action: { type: "task", title: "Проверить, что КП ушло, и назначить срок ответа", kind: "todo", afterHours: 0 } },
-      { name: "КП без ответа 3 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 3 }, action: { type: "task", title: "Напомнить про КП — спросить, что смущает", kind: "msg", afterHours: 1 } },
+      { name: "КП без ответа 3 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 3, stageId: "sm_kp" }, action: { type: "task", title: "Напомнить про КП — спросить, что смущает", kind: "msg", afterHours: 1 } },
+      { name: "Клиент ждёт ответа 2 часа → ответить", enabled: true, trigger: { type: "unanswered", entityId: "deals", hours: 2 }, action: { type: "task", title: "Ответить лиду — ждёт больше двух часов", kind: "msg", afterHours: 0 } },
       { name: "Договор → выставить счёт", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_deal" }, action: { type: "task", title: "Выставить счёт и прислать договор", kind: "todo", afterHours: 0 } },
       { name: "В работе → отчёт в конце месяца", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "sm_won" }, action: { type: "task", title: "Поставить напоминание об отчёте и продлении", kind: "todo", afterHours: 1 } },
       { name: "Тишина 60 дней → вернуть клиента", enabled: true, trigger: { type: "quiet", entityId: "deals", days: 60 }, action: { type: "task", title: "Показать свежие кейсы — предложить аудит соцсетей", kind: "msg", afterHours: 1 } },
@@ -224,9 +245,11 @@ export const PRESETS: Preset[] = [
     rules: [
       { name: "Новая заявка → ответить за 15 минут", enabled: true, trigger: { type: "record_created", entityId: "deals" }, action: { type: "task", title: "Ответить клиенту (за 15 минут)", kind: "msg", afterHours: 0.25 } },
       { name: "Предоплата → прислать реквизиты", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "bk_pay" }, action: { type: "task", title: "Прислать реквизиты для предоплаты", kind: "msg", afterHours: 0 } },
-      { name: "Завис в «Согласовании» 2 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 2 }, action: { type: "task", title: "Согласование затянулось — напомнить", kind: "msg", afterHours: 2 } },
+      { name: "Завис в «Согласовании» 2 дня → дожать", enabled: true, trigger: { type: "stage_stuck", entityId: "deals", days: 2, stageId: "bk_agree" }, action: { type: "task", title: "Согласование затянулось — напомнить", kind: "msg", afterHours: 2 } },
       { name: "Выполнен → отзыв и следующая дата", enabled: true, trigger: { type: "stage_enter", entityId: "deals", stageId: "bk_won" }, action: { type: "task", title: "Попросить отзыв и фото, спросить про следующий повод", kind: "msg", afterHours: 24 } },
       { name: "Тишина 60 дней → напомнить о себе", enabled: true, trigger: { type: "quiet", entityId: "deals", days: 60 }, action: { type: "task", title: "Давно не заказывали — напомнить к празднику", kind: "msg", afterHours: 1 } },
+      { name: "За 2 дня до «К дате» → подтвердить выдачу", enabled: true, trigger: { type: "date_before", entityId: "deals", fieldId: "giftdate", days: 2 }, action: { type: "task", title: "Подтвердить с клиентом время выдачи или доставки", kind: "msg", afterHours: 0 } },
+      { name: "Клиент ждёт ответа 1 час → ответить", enabled: true, trigger: { type: "unanswered", entityId: "deals", hours: 1 }, action: { type: "task", title: "Ответить клиенту — ждёт больше часа", kind: "msg", afterHours: 0 } },
     ],
     clients: [
       { key: "irina", name: "Ирина Соловьёва", phone: "+7 917 442-90-11", channel: "Instagram", wishes: "Без орехов, любит красный бархат" },

@@ -50,7 +50,7 @@ const toasts = await page.locator("[data-sonner-toast]").allInnerTexts();
 ok("Сказал, что объединил", toasts.some(t => /объединено/i.test(t)), toasts.join(" | ").slice(0, 120));
 
 // ---------- Ctrl+Z отменяет импорт ----------
-await page.mouse.click(700, 400);
+await page.mouse.click(700, 650); // мимо таблицы: в ячейке телефона теперь ссылка tel:, а headless-Chromium после неё «зависает» на внешней схеме
 await page.keyboard.press("Control+z");
 await page.waitForTimeout(500);
 

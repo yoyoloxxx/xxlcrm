@@ -185,7 +185,7 @@ export default function App() {
         <div className="flex items-center gap-2.5 px-4 pb-4 pt-[18px]">
           <span className="mark-frame grid h-[26px] w-[26px] place-items-center rounded-[6px] text-[9.5px] font-bold" style={{ color: "var(--brass-ink)" }}>XXL</span>
           <span className="text-[15px] font-semibold tracking-tight">XXLcrm</span>
-          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.29</span>
+          <span className="font-mono2 ml-auto text-[9.5px] text-muted-foreground/70">v0.30</span>
         </div>
 
         {s.mode === "cloud" ? (
@@ -343,7 +343,7 @@ export default function App() {
         </nav>
 
         <footer className="hidden h-7 shrink-0 items-center gap-3 border-t px-3.5 sm:flex">
-          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.29 · у каждого канала кнопка «куда идти», список «что сделать, чтобы заявки приходили», «не подключён» ведёт к настройке</span>
+          <span className="font-mono2 text-[10px] text-muted-foreground">XXLcrm v0.30</span>
           <span className="font-mono2 ml-auto text-[10px] text-muted-foreground/70">{entId ? (s.entities.find(e => e.id === entId)?.namePlural ?? "") : TITLES[page] ?? ""}</span>
         </footer>
       </div>
@@ -425,7 +425,7 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-3 pt-4 md:px-5">
-        <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} ${plural(count, "запись", "записи", "записей")}`} · ${hasStages ? "воронка со стадиями" : "таблица"} · живой раздел`}>
+        <ScreenHead title={e.namePlural} sub={`${filterOn ? `показано ${shown} из ${count}` : `${count} ${plural(count, "запись", "записи", "записей")}`} · ${hasStages ? "воронка со стадиями" : "справочник"}`}>
           <button onClick={openSetup}
             className="press inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground">
             <SlidersHorizontal className="size-3" /> Настроить раздел
@@ -528,39 +528,46 @@ function EntityScreen({ id, openSetup }: { id: string; openSetup: () => void }) 
   );
 }
 
+// Сводка раздела: живые цифры по настоящим данным — период, воронка, деньги, источники,
+// и то, что владелец смотрит первым делом: кто из сотрудников тянет. Разделы без воронки
+// тоже получают сводку (раньше вкладка роняла приложение на «stages.find»).
+type Period = "week" | "month" | "quarter" | "year" | "all";
+const PERIODS: [Period, string, number][] = [["week", "неделя", 7], ["month", "месяц", 30], ["quarter", "квартал", 91], ["year", "год", 365], ["all", "всё время", 0]];
+
 function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () => void }) {
   useApp(); // живая подписка на стор
   const s = getState();
-  const pipelines = allEntities().filter(e => (e.stages?.length ?? 0) > 0);
-  const primary = entity ?? pipelines[0];   // сводка по разделу, в котором стоишь
+  const [period, setPeriod] = useState<Period>(() => {
+    try { return (localStorage.getItem("xxl-stats-period") as Period) || "month"; } catch { return "month"; }
+  });
+  useEffect(() => { try { localStorage.setItem("xxl-stats-period", period); } catch { /* нет хранилища */ } }, [period]);
+  const primary = entity ?? allEntities().find(e => (e.stages?.length ?? 0) > 0) ?? allEntities()[0];
   const recs = primary ? s.records.filter(r => r.entityId === primary.id) : [];
 
-  // Нет воронки или совсем нет записей — честное пустое состояние вместо выдуманных цифр.
+  // Нет записей — честное пустое состояние вместо выдуманных цифр.
   if (!primary || recs.length === 0) {
     return (
       <div className="cascade mx-auto max-w-4xl px-5 py-6">
-        <ScreenHead title="Дашборд" sub="Сводка соберётся сама, как только появятся записи" />
+        <ScreenHead title="Сводка" sub="Соберётся сама, как только появятся записи" />
         <div className="mt-8 grid place-items-center rounded-lg border border-dashed px-6 py-16 text-center">
           <LayoutDashboard className="size-7 text-muted-foreground/50" />
           <div className="mt-3 text-[14px] font-medium">
-            {primary ? `Пока нет записей в разделе «${primary.namePlural}»` : "Пока нет ни одной воронки"}
+            {primary ? `Пока нет записей в разделе «${primary.namePlural}»` : "Пока нет ни одного раздела"}
           </div>
           <p className="mt-1 max-w-sm text-[12.5px] text-muted-foreground">
             {primary
-              ? "Дашборд посчитает воронку, суммы и источники автоматически — по вашим настоящим данным, без выдуманных цифр."
-              : "Создайте раздел с этапами (воронку) — и здесь появится живая сводка."}
+              ? "Сводка посчитает воронку, суммы, источники и работу сотрудников автоматически — по вашим настоящим данным, без выдуманных цифр."
+              : "Создайте раздел — и здесь появится живая сводка."}
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             {onPresets && (
-              <button
-                onClick={onPresets}
+              <button onClick={onPresets}
                 className="press inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3.5 text-[12.5px] font-medium text-primary-foreground transition-opacity hover:opacity-90">
                 <Sparkles className="size-3.5" /> Выбрать шаблон ниши
               </button>
             )}
             {primary && (
-              <button
-                onClick={() => { const id = A.createRecord(primary.id, {}); A.openRecord(id); }}
+              <button onClick={() => { const id = A.createRecord(primary.id, {}); A.openRecord(id); }}
                 className="press inline-flex h-9 items-center gap-1.5 rounded-md border px-3.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground">
                 <Plus className="size-3.5" /> {primary.name} вручную
               </button>
@@ -571,54 +578,98 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
     );
   }
 
-  const stages = primary.stages!;
+  const days = PERIODS.find(p => p[0] === period)![2];
+  const since = days ? now() - days * DAY : 0;
+  const inPeriod = (ts?: number) => (ts ?? 0) >= since;
+  const stages = primary.stages ?? [];
+  const hasStages = stages.length > 0;
   const kindOf = (id?: string) => stages.find(x => x.id === id)?.kind;
-  const openRecs = recs.filter(r => kindOf(r.stageId) === "open");
-  const wonRecs = recs.filter(r => kindOf(r.stageId) === "won");
-  const lostRecs = recs.filter(r => kindOf(r.stageId) === "lost");
+  const openRecs = hasStages ? recs.filter(r => kindOf(r.stageId) === "open") : recs;
+  const wonAll = hasStages ? recs.filter(r => kindOf(r.stageId) === "won") : [];
+  const lostAll = hasStages ? recs.filter(r => kindOf(r.stageId) === "lost") : [];
+  const wonP = wonAll.filter(r => inPeriod(r.stageAt ?? r.updatedAt));
+  const lostP = lostAll.filter(r => inPeriod(r.stageAt ?? r.updatedAt));
+  const newP = recs.filter(r => inPeriod(r.createdAt));
   const moneyF = primary.fields.find(f => f.type === "money");
   const sumOf = (arr: Rec[]) => moneyF ? arr.reduce((n, r) => n + (Number(r.values[moneyF.id]) || 0), 0) : 0;
-  const newWeek = recs.filter(r => r.createdAt >= now() - 7 * DAY).length;
-  const wonMonth = wonRecs.filter(r => (r.stageAt ?? r.updatedAt) >= now() - 30 * DAY);
-  const closed = wonRecs.length + lostRecs.length;
-  const conv = closed ? Math.round((wonRecs.length / closed) * 100) : 0;
+  const closedP = wonP.length + lostP.length;
+  const conv = closedP ? Math.round((wonP.length / closedP) * 100) : 0;
   const pl = primary.namePlural.toLowerCase();
+  const one = primary.name.toLowerCase();
+  const periodLabel = PERIODS.find(p => p[0] === period)![1];
+  const overdue = s.tasks.filter(t => !t.done && t.due < now() && recs.some(r => r.id === t.recordId));
 
-  const cards: [string, string, string][] = moneyF
-    ? [
-        ["В работе", fmtMoney(sumOf(openRecs)) || "0 ₽", `${openRecs.length} ${plural(openRecs.length, "открыта", "открыты", "открыто")}`],
-        ["Выиграно за месяц", fmtMoney(sumOf(wonMonth)) || "0 ₽", `${wonMonth.length} ${plural(wonMonth.length, "сделка", "сделки", "сделок")}`],
-        ["Новых за неделю", String(newWeek), pl],
-        ["Конверсия", closed ? conv + "%" : "—", closed ? `${wonRecs.length} из ${closed} закрытых` : "нет закрытых"],
-      ]
+  const cards: [string, string, string][] = hasStages
+    ? (moneyF
+      ? [
+          ["В работе", fmtMoney(sumOf(openRecs)) || "0 ₽", `${openRecs.length} ${plural(openRecs.length, "открыта", "открыты", "открыто")}`],
+          [`Выиграно · ${periodLabel}`, fmtMoney(sumOf(wonP)) || "0 ₽", `${wonP.length} ${plural(wonP.length, one, pl, pl)}`],
+          [`Новых · ${periodLabel}`, String(newP.length), pl],
+          ["Конверсия", closedP ? conv + "%" : "—", closedP ? `${wonP.length} из ${closedP} закрытых` : "нет закрытых за период"],
+        ]
+      : [
+          ["Открытых", String(openRecs.length), pl],
+          [`Выиграно · ${periodLabel}`, String(wonP.length), `из ${recs.length} всего`],
+          [`Новых · ${periodLabel}`, String(newP.length), pl],
+          ["Конверсия", closedP ? conv + "%" : "—", closedP ? `${wonP.length} из ${closedP}` : "нет закрытых за период"],
+        ])
     : [
-        ["Открытых", String(openRecs.length), pl],
-        ["Выиграно", String(wonRecs.length), `из ${recs.length} всего`],
-        ["Новых за неделю", String(newWeek), pl],
-        ["Конверсия", closed ? conv + "%" : "—", closed ? `${wonRecs.length} из ${closed}` : "нет закрытых"],
+        ["Всего", String(recs.length), pl],
+        [`Новых · ${periodLabel}`, String(newP.length), pl],
+        [moneyF ? `Сумма · ${periodLabel}` : "С телефоном", moneyF ? (fmtMoney(sumOf(newP)) || "0 ₽") : String(recs.filter(r => primary.fields.some(f => f.type === "phone" && r.values[f.id])).length), moneyF ? "по новым записям" : "можно позвонить"],
+        ["Просроченных задач", String(overdue.length), overdue.length ? "по записям раздела" : "всё в срок"],
       ];
 
   const stageCount = (id: string) => recs.filter(r => r.stageId === id).length;
   const maxStage = Math.max(1, ...stages.map(st => stageCount(st.id)));
 
-  // Источники — по полю «Источник», если он есть в разделе.
-  const srcF = primary.fields.find(f => f.id === "source" || /источник/i.test(f.label));
+  // Источники — по полю «Источник/Канал», если оно есть в разделе.
+  const srcF = primary.fields.find(f => f.id === "source" || /источник|канал/i.test(f.label));
   let sources: [string, number][] = [];
   if (srcF) {
     const m = new Map<string, number>();
-    for (const r of recs) {
+    for (const r of newP.length ? newP : recs) {
       const label = displayValue(srcF, r.values[srcF.id], dispCtx()).trim();
       if (label) m.set(label, (m.get(label) ?? 0) + 1);
     }
     sources = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
   }
   const maxSrc = Math.max(1, ...sources.map(([, n]) => n));
+  // Причины отказа — по полю «Причина», если раздел его ведёт
+  const reasonF = primary.fields.find(f => f.type === "select" && /причин/i.test(f.label));
+  let reasons: [string, number][] = [];
+  if (reasonF) {
+    const m = new Map<string, number>();
+    for (const r of lostAll) { const l = displayValue(reasonF, r.values[reasonF.id], dispCtx()).trim(); if (l) m.set(l, (m.get(l) ?? 0) + 1); }
+    reasons = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }
+  const maxReason = Math.max(1, ...reasons.map(([, n]) => n));
 
-  const events = collapseFieldRuns([...s.activities].sort((a, b) => b.ts - a.ts)).slice(0, 7);
+  // Сотрудники: кто сколько ведёт, сколько выиграл за период, конверсия, просрочка
+  const people = s.users.map(u => {
+    const mine = recs.filter(r => r.ownerId === u.id);
+    const op = hasStages ? mine.filter(r => kindOf(r.stageId) === "open") : mine;
+    const wn = mine.filter(r => hasStages && kindOf(r.stageId) === "won" && inPeriod(r.stageAt ?? r.updatedAt));
+    const ls = mine.filter(r => hasStages && kindOf(r.stageId) === "lost" && inPeriod(r.stageAt ?? r.updatedAt));
+    const od = s.tasks.filter(t => !t.done && t.due < now() && t.ownerId === u.id && mine.some(r => r.id === t.recordId)).length;
+    return { u, open: op.length, openSum: sumOf(op), won: wn.length, wonSum: sumOf(wn), closed: wn.length + ls.length, overdue: od, total: mine.length };
+  }).filter(p => p.total > 0).sort((a, b) => b.wonSum - a.wonSum || b.won - a.won || b.open - a.open);
+
+  const events = collapseFieldRuns([...s.activities].filter(a => recs.some(r => r.id === a.recordId)).sort((a, b) => b.ts - a.ts)).slice(0, 7);
 
   return (
     <div className="cascade mx-auto max-w-4xl px-5 py-6">
-      <ScreenHead title="Дашборд" sub={`Живая сводка по разделу «${primary.namePlural}»`} />
+      <ScreenHead title="Сводка" sub={`По разделу «${primary.namePlural}» · по настоящим данным`}>
+        <div className="flex items-center gap-0.5 rounded-md border p-0.5" role="tablist" aria-label="Период">
+          {PERIODS.map(([id, label]) => (
+            <button key={id} role="tab" aria-selected={period === id} onClick={() => setPeriod(id)}
+              className={cn("press rounded px-2 py-1 text-[11.5px] transition-colors", period === id ? "font-medium" : "text-muted-foreground hover:text-foreground")}
+              style={period === id ? { background: "hsl(var(--brass) / 0.2)", color: "var(--brass-ink)" } : undefined}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </ScreenHead>
 
       <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 border-y py-4 md:grid-cols-4 md:divide-x">
         {cards.map(([l, v, sub], i) => (
@@ -630,30 +681,92 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
         ))}
       </div>
 
+      {people.length > 0 && (
+        <div className="mt-6">
+          <div className="eyebrow">Сотрудники · {periodLabel}</div>
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">Кто</th>
+                  <th className="py-1.5 pr-3 font-medium">В работе</th>
+                  {hasStages && <th className="py-1.5 pr-3 font-medium">Выиграно</th>}
+                  {hasStages && <th className="py-1.5 pr-3 font-medium">Конверсия</th>}
+                  <th className="py-1.5 font-medium">Просрочено</th>
+                </tr>
+              </thead>
+              <tbody>
+                {people.map(p => (
+                  <tr key={p.u.id} className="border-t">
+                    <td className="py-1.5 pr-3">
+                      <span className="inline-flex items-center gap-1.5"><Avatar n={p.u.name.trim().charAt(0).toUpperCase() || "?"} hue={p.u.hue} size={18} />{p.u.name}</span>
+                    </td>
+                    <td className="font-mono2 tnum py-1.5 pr-3">{p.open}{moneyF && p.openSum ? <span className="text-muted-foreground"> · {fmtMoney(p.openSum)}</span> : null}</td>
+                    {hasStages && <td className="font-mono2 tnum py-1.5 pr-3">{p.won}{moneyF && p.wonSum ? <span className="text-muted-foreground"> · {fmtMoney(p.wonSum)}</span> : null}</td>}
+                    {hasStages && <td className="font-mono2 tnum py-1.5 pr-3">{p.closed ? Math.round((p.won / p.closed) * 100) + "%" : "—"}</td>}
+                    <td className={cn("font-mono2 tnum py-1.5", p.overdue && "text-destructive")}>{p.overdue || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-8 md:grid-cols-2">
         <div>
-          <div className="eyebrow">Воронка · {primary.namePlural}</div>
-          <div className="mt-3 flex flex-col gap-1.5">
-            {stages.map(stage => {
-              const n = stageCount(stage.id);
-              const w = Math.round((n / maxStage) * 100);
-              return (
-                <div key={stage.id} className="flex items-center gap-2.5">
-                  <span className="w-28 truncate text-[11.5px] text-muted-foreground" title={stage.label}>{stage.label}</span>
-                  <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
-                    <div className="h-full rounded-[3px]" style={{ width: (n ? Math.max(6, w) : 0) + "%", background: stage.color + "d9" }} />
+          {hasStages ? (
+            <>
+              <div className="eyebrow">Воронка · {primary.namePlural}</div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                {stages.map(stage => {
+                  const n = stageCount(stage.id);
+                  const w = Math.round((n / maxStage) * 100);
+                  const sum = moneyF ? sumOf(recs.filter(r => r.stageId === stage.id)) : 0;
+                  return (
+                    <div key={stage.id} className="flex items-center gap-2.5">
+                      <span className="w-28 truncate text-[11.5px] text-muted-foreground" title={stage.label}>{stage.label}</span>
+                      <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70" title={moneyF ? fmtMoney(sum) : undefined}>
+                        <div className="h-full rounded-[3px]" style={{ width: (n ? Math.max(6, w) : 0) + "%", background: stage.color + "d9" }} />
+                      </div>
+                      <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
+                      {moneyF && <span className="font-mono2 hidden w-20 text-right text-[10.5px] text-muted-foreground sm:block">{sum ? fmtMoney(sum) : ""}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="eyebrow">Раздел без воронки</div>
+              <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
+                «{primary.namePlural}» — справочник: здесь считаются записи, новые за период и задачи.
+                Воронку и конверсию можно включить в «Настроить раздел → Основное».
+              </p>
+            </>
+          )}
+          {reasons.length > 0 && (
+            <>
+              <div className="eyebrow mt-6">Причины отказа</div>
+              <div className="mt-3 flex flex-col gap-1.5">
+                {reasons.map(([l, n]) => (
+                  <div key={l} className="flex items-center gap-2.5">
+                    <span className="w-28 truncate text-[11.5px] text-muted-foreground" title={l}>{l}</span>
+                    <div className="h-[16px] flex-1 overflow-hidden rounded-[3px] bg-muted/70">
+                      <div className="h-full rounded-[3px]" style={{ width: Math.max(6, Math.round((n / maxReason) * 100)) + "%", background: "hsl(var(--destructive) / 0.55)" }} />
+                    </div>
+                    <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
                   </div>
-                  <span className="font-mono2 w-5 text-right text-[11px]">{n}</span>
-                </div>
-              );
-            })}
-          </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         <div>
           {sources.length > 0 && (
             <>
-              <div className="eyebrow">Источники</div>
+              <div className="eyebrow">Источники{newP.length ? ` · ${periodLabel}` : ""}</div>
               <div className="mt-3 flex flex-col gap-1.5">
                 {sources.map(([l, n], i) => (
                   <div key={l} className="flex items-center gap-2.5">
@@ -669,14 +782,14 @@ function Dashboard({ entity, onPresets }: { entity?: EntityCfg; onPresets?: () =
           )}
           <div className={cn("eyebrow", sources.length > 0 && "mt-6")}>Последние события</div>
           <div className="mt-2.5 flex flex-col gap-2">
-            {events.length === 0 && <div className="text-[12px] text-muted-foreground">Пока пусто — события появятся с активностью в разделах.</div>}
+            {events.length === 0 && <div className="text-[12px] text-muted-foreground">Пока пусто — события появятся с активностью в разделе.</div>}
             {events.map(a => {
               const rec = recById(a.recordId);
               return (
                 <div key={a.id} className="flex items-baseline gap-2.5 text-[12px]">
                   <span className="font-mono2 shrink-0 text-[10.5px] text-muted-foreground">{relTime(a.ts)}</span>
                   <span className="min-w-0 flex-1 truncate" title={a.text}>{a.text}</span>
-                  {rec && <span className="max-w-[110px] shrink-0 truncate text-[10.5px] text-muted-foreground">{recTitle(a.recordId)}</span>}
+                  {rec && <button onClick={() => A.openRecord(rec.id)} className="press max-w-[110px] shrink-0 truncate text-[10.5px] text-muted-foreground hover:text-foreground">{recTitle(a.recordId)}</button>}
                 </div>
               );
             })}

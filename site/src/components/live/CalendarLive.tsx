@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { EntityCfg, Rec } from "@/lib/model";
 import { fmtMoney, plural } from "@/lib/model";
-import { useApp, A, getState, recTitle, entityCfg } from "@/lib/store";
+import { useApp, A, getState, recTitle, entityCfg, storeVersion } from "@/lib/store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
@@ -74,9 +74,10 @@ export function CalendarLive({ entity, filter }: { entity: EntityCfg; filter?: (
       });
     }
     return map;
-    // Пересчитываем на КАЖДЫЙ рендер стора: раньше зависимости смотрели на длину массивов,
-    // и поправленная дата не двигала событие в календаре до перезагрузки.
-  }, [entity, fieldId, showTasks, filter, offset, s]);
+    // Зависимость — НОМЕР версии стора: сам объект стора не меняется никогда, и «s» в
+    // зависимостях ничего не пересчитывал — поправленная дата не двигала событие до смены месяца.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity, fieldId, showTasks, filter, offset, s, storeVersion()]);
 
   const first = new Date(cur.getFullYear(), cur.getMonth(), 1);
   const shift = (first.getDay() + 6) % 7; // неделя с понедельника

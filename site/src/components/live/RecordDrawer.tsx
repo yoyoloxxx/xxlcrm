@@ -2,28 +2,63 @@
 import { useEffect, useRef, useState } from "react";
 import type { TaskKind } from "@/lib/model";
 import { relTime, fmtDateTime, fmtDate } from "@/lib/model";
-import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, missingRequired, isBlank, entityCfg as entCfg } from "@/lib/store";
+import { A, entityCfg, recById, recTitle, userName, getState, relatedOf, allEntities, collapseFieldRuns, missingRequired, isBlank, entityCfg as entCfg, recordsOf, phoneKey } from "@/lib/store";
 import { sendChatMessage } from "@/lib/integrations";
 import { toast } from "sonner";
 import { fillTemplate, unfilledVars } from "@/lib/fill";
-import { channelName, FIELD_TYPES } from "@/lib/model";
+import { channelName, FIELD_TYPES, PALETTE, uid } from "@/lib/model";
+import type { Field, Rec } from "@/lib/model";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FieldInput } from "./FieldInput";
+import { FieldInput, RelationInput } from "./FieldInput";
 import { OwnerPicker } from "./TableLive";
 import { UserChip } from "./bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ArrowUpRight, CalendarClock, ListChecks, MessageSquare, MoreVertical, Phone, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowUpRight, CalendarClock, ListChecks, Merge, MessageSquare, MoreVertical, Phone, Plus, Send, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TASK_ICON: Record<TaskKind, React.ElementType> = { call: Phone, meet: CalendarClock, todo: ListChecks, msg: MessageSquare };
 const TASK_NAME: Record<TaskKind, string> = { call: "Звонок", meet: "Встреча", todo: "Дело", msg: "Сообщение" };
 
+// «Фокус на поле»: стор просит карточку подсветить поле (перенос в «Проиграна» → «Причина отказа»)
+// событием окна, а не импортом — стор о компонентах не знает. Просьба лежит здесь, пока
+// карточка нужной записи не смонтируется и не заберёт её.
+let wantFocus: { recId: string; fieldId: string } | null = null;
+const focusWaiters = new Set<() => void>();
+if (typeof window !== "undefined") {
+  window.addEventListener("xxl:focus-field", ev => {
+    const d = (ev as CustomEvent<{ recId: string; fieldId: string }>).detail;
+    if (d?.recId && d?.fieldId) { wantFocus = d; focusWaiters.forEach(w => w()); }
+  });
+}
+
 export function RecordDrawer({ recordId }: { recordId: string }) {
   const r = recById(recordId);
   const e = r ? entityCfg(r.entityId) : undefined;
+  // подсвеченное поле: держим, пока оно пустое; заполнили — подсветка гаснет
+  const [focusId, setFocusId] = useState<string | null>(null);
+  useEffect(() => {
+    setFocusId(null);
+    const take = () => { if (wantFocus && wantFocus.recId === recordId) { setFocusId(wantFocus.fieldId); wantFocus = null; } };
+    take();
+    focusWaiters.add(take);
+    return () => { focusWaiters.delete(take); };
+  }, [recordId]);
+  useEffect(() => {
+    if (!focusId) return;
+    // после собственного фокуса карточки (360 мс), иначе он перебьёт наш
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`fld_${recordId}_${focusId}`);
+      if (!el) return;
+      el.scrollIntoView({ block: "center" });
+      el.querySelector<HTMLElement>("button,input,textarea")?.focus();
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [focusId, recordId]);
+  const [merging, setMerging] = useState(false); // «Объединить с…» из меню
+  useEffect(() => { setMerging(false); }, [recordId]);
   // Карточка открывается ровно поверх кнопки «+ Сделка». Второй щелчок двойного клика попадал
   // в полосу стадий и мгновенно помечал новую сделку «Проиграна». Первые 350 мс щелчки не берём.
   const [armed, setArmed] = useState(false);
@@ -35,7 +70,12 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
     const returnTo = document.activeElement as HTMLElement | null;
     // Фокус ставим на саму карточку, а не в первое поле: тогда Tab сразу идёт по её
     // содержимому, а Escape закрывает карточку, не «выходя из поля» лишним нажатием.
-    const t = window.setTimeout(() => asideRef.current?.focus(), 360);
+    // Новая пустая карточка — фокус сразу в заголовок, чтобы печатать без лишнего клика;
+    // раньше отложенный фокус на панель перебивал autoFocus поля.
+    const t = window.setTimeout(() => {
+      const title = asideRef.current?.querySelector<HTMLInputElement>('input[data-title-field]');
+      if (title && !title.value) title.focus(); else asideRef.current?.focus();
+    }, 360);
     return () => { window.clearTimeout(t); if (returnTo && document.body.contains(returnTo)) returnTo.focus(); };
   }, [recordId]);
   // Tab не должен выпадать из карточки в фон: там лежит то, чего человек сейчас не видит
@@ -90,7 +130,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
               value={String(r.values[e.titleFieldId] ?? "")}
               onChange={ev => A.setValue(r.id, titleField, ev.target.value)}
               placeholder={`${titleField.label}…`}
-              autoFocus={!String(r.values[e.titleFieldId] ?? "")}
+              autoFocus={!String(r.values[e.titleFieldId] ?? "")} data-title-field
               className="mt-0.5 w-full rounded-md border bg-background px-2 py-1 text-[15px] font-semibold outline-none transition-colors focus:border-ring"
             />
             <div className="font-mono2 mt-1 text-[10.5px] text-muted-foreground">{e.name} №{r.num} · создана {relTime(r.createdAt)}</div>
@@ -100,6 +140,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
               <button aria-label="Ещё действия" title="Ещё" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"><MoreVertical className="size-4" /></button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem className="gap-2" onClick={() => setMerging(true)}><Merge className="size-4" /> Объединить с…</DropdownMenuItem>
               <DropdownMenuItem className="gap-2 text-destructive" onClick={() => A.deleteRecord(r.id)}><Trash2 className="size-4" /> Удалить запись</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -137,6 +178,7 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
         )}
 
         <LinkToPipeline rec={r} />
+        {merging ? <MergeWith rec={r} onClose={() => setMerging(false)} /> : <DuplicateHint rec={r} />}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <section className="px-4 py-3.5">
@@ -145,12 +187,20 @@ export function RecordDrawer({ recordId }: { recordId: string }) {
                 <label className="eyebrow">Ответственный</label>
                 <OwnerPicker rec={r} />
               </div>
-              {e.fields.filter(f => f.id !== e.titleFieldId).map(f => (
-                <div key={f.id} id={`fld_${r.id}_${f.id}`} className={cn("flex flex-col gap-1", f.type === "textarea" && "sm:col-span-2")}>
-                  <label className="eyebrow">{f.label}{f.required && <span title="обязательное" style={{ color: isBlank(r.values[f.id]) ? "var(--brass-ink)" : undefined }}> *</span>}</label>
-                  <FieldInput field={f} value={r.values[f.id]} onChange={v => A.setValue(r.id, f, v)} />
-                </div>
-              ))}
+              {e.fields.filter(f => f.id !== e.titleFieldId).map(f => {
+                const hl = focusId === f.id && isBlank(r.values[f.id]);
+                return (
+                  <div key={f.id} id={`fld_${r.id}_${f.id}`} data-highlight={hl ? "1" : undefined}
+                    className={cn("flex flex-col gap-1 rounded-md transition-shadow", (f.type === "textarea" || f.type === "multiselect") && "sm:col-span-2",
+                      hl && "-m-1.5 p-1.5 ring-2 ring-[hsl(var(--brass))]")}>
+                    <label className="eyebrow" style={hl ? { color: "var(--brass-ink)" } : undefined}>
+                      {f.label}{f.required && <span title="обязательное" style={{ color: isBlank(r.values[f.id]) ? "var(--brass-ink)" : undefined }}> *</span>}
+                      {hl && <span className="ml-1.5 normal-case tracking-normal" style={{ color: "var(--brass-ink)" }}>— укажите</span>}
+                    </label>
+                    <FieldInput field={f} value={r.values[f.id]} onChange={v => A.setValue(r.id, f, v)} />
+                  </div>
+                );
+              })}
             </div>
             <AddFieldInline entityId={e.id} />
           </section>
@@ -267,6 +317,74 @@ function RelatedBlock({ recId }: { recId: string }) {
   );
 }
 
+// Один человек = одна карточка. В справочнике (раздел без стадий) тот же телефон у другой
+// записи — почти наверняка дубль: предлагаем слить, старшая карточка остаётся, задачи,
+// история и связи переезжают в неё. Два шага — одно нажатие не должно уносить карточку.
+function DuplicateHint({ rec }: { rec: Rec }) {
+  const [armed, setArmed] = useState(false);
+  const e = entityCfg(rec.entityId);
+  if (e.stages?.length) return null;
+  const phoneF = e.fields.find(f => f.type === "phone");
+  const key = phoneF ? phoneKey(rec.values[phoneF.id]) : null;
+  if (!phoneF || !key) return null;
+  const dup = recordsOf(e.id).find(x => x.id !== rec.id && phoneKey(x.values[phoneF.id]) === key);
+  if (!dup) return null;
+  const [keep, drop] = dup.createdAt <= rec.createdAt ? [dup, rec] : [rec, dup];
+  const merge = () => { A.mergeRecords(keep.id, drop.id); setArmed(false); };
+  return (
+    <div data-dup-hint className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-2 text-[11.5px]" style={{ background: "hsl(var(--brass) / 0.12)" }}>
+      <span className="font-medium" style={{ color: "var(--brass-ink)" }}>Похожая запись по телефону:</span>
+      <button onClick={() => A.openRecord(dup.id)} className="press truncate underline-offset-2 hover:underline" title="Открыть">«{recTitle(dup.id)}»</button>
+      {!armed ? (
+        <button onClick={() => setArmed(true)} className="press rounded border px-1.5 py-0.5 font-medium hover:bg-background" style={{ borderColor: "var(--brass-ink)", color: "var(--brass-ink)" }}>
+          → Объединить
+        </button>
+      ) : (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <span className="text-muted-foreground">Останется «{recTitle(keep.id)}», вторая вольётся в неё и будет удалена. Ctrl+Z вернёт.</span>
+          <button onClick={merge} className="press rounded border px-2 py-0.5 font-medium text-primary-foreground" style={{ background: "hsl(var(--primary))", borderColor: "transparent" }}>да, объединить</button>
+          <button onClick={() => setArmed(false)} className="press rounded border px-2 py-0.5 text-muted-foreground">нет</button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// «Объединить с…» из меню карточки: выбираем вторую запись тем же комбобоксом с поиском,
+// она вливается в ЭТУ карточку и удаляется.
+function MergeWith({ rec, onClose }: { rec: Rec; onClose: () => void }) {
+  const [pick, setPick] = useState<string | undefined>();
+  const [armed, setArmed] = useState(false);
+  const e = entityCfg(rec.entityId);
+  const pseudo: Field = { id: "__merge", label: "С какой записью объединить", type: "relation", relationTo: e.id };
+  const other = pick ? recById(pick) : undefined;
+  const merge = () => { if (!other) return; A.mergeRecords(rec.id, other.id); onClose(); };
+  return (
+    <div data-merge-with className="border-b px-4 py-2.5" style={{ background: "hsl(var(--brass) / 0.12)" }}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="eyebrow" style={{ color: "var(--brass-ink)" }}>Объединить с…</span>
+        <button onClick={onClose} aria-label="Не объединять" className="press rounded p-1 text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+      </div>
+      <div className="mt-1.5">
+        <RelationInput f={pseudo} value={pick} onChange={v => { setPick(typeof v === "string" ? v : undefined); setArmed(false); }} exclude={[rec.id]} noCreate />
+      </div>
+      {other && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+          {!armed ? (
+            <Button size="sm" className="h-7 gap-1.5 text-[12px]" onClick={() => setArmed(true)}><Merge className="size-3.5" /> Объединить</Button>
+          ) : (
+            <>
+              <span className="text-muted-foreground">«{recTitle(other.id)}» вольётся в эту карточку и будет удалена: задачи, история и связи переедут сюда. Ctrl+Z вернёт.</span>
+              <Button size="sm" className="h-7 text-[12px]" onClick={merge}>да, объединить</Button>
+              <Button size="sm" variant="outline" className="h-7 text-[12px]" onClick={() => setArmed(false)}>нет</Button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Поле можно завести прямо из карточки: понял в моменте, что нужен «трек-номер» — добавил, не уходя в конструктор
 function AddFieldInline({ entityId }: { entityId: string }) {
   const [open, setOpen] = useState(false);
@@ -282,7 +400,10 @@ function AddFieldInline({ entityId }: { entityId: string }) {
   }
   const save = () => {
     if (!label.trim()) return;
-    A.fieldAdd(entityId, { label: label.trim(), type: type as never, inTable: true });
+    // список без вариантов бесполезен — даём два стартовых, переименуют в конструкторе
+    const options = type === "select" || type === "multiselect"
+      ? ["Вариант 1", "Вариант 2"].map((l, i) => ({ id: uid("o"), label: l, color: PALETTE[i % PALETTE.length] })) : undefined;
+    A.fieldAdd(entityId, { label: label.trim(), type: type as Field["type"], inTable: true, ...(options ? { options } : {}) });
     setLabel(""); setType("text"); setOpen(false);
   };
   return (

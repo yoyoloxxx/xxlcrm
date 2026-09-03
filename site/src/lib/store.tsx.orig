@@ -12,7 +12,7 @@ import { parseRuDate as parseRu } from "./rudate";
 import { parseNumCell } from "./csv";
 import { resolvePreset, buildPresetData, saveCustomPreset, deleteCustomPreset, PRESETS } from "./presets";
 
-interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations; users?: User[]; wsName?: string }
+interface DataState { entities: EntityCfg[]; automations: Rule[]; routes: Route[]; records: Rec[]; tasks: Task[]; activities: Activity[]; chats: Chat[]; replyTemplates: ReplyTemplate[]; integrations: Integrations }
 interface State extends DataState {
   currentUserId: string;
   drawerRecordId: string | null;
@@ -111,9 +111,6 @@ const persistence = {
         chats: d.chats ?? [], // миграция со старой версии: инбокс начнётся пустым
         replyTemplates: Array.isArray(d.replyTemplates) && d.replyTemplates.length ? d.replyTemplates : DEFAULT_TEMPLATES,
         integrations: ints,
-        // команда локального режима (своё имя, убранные демо-коллеги) и название компании
-        users: Array.isArray(d.users) && d.users.length ? d.users : undefined,
-        wsName: typeof d.wsName === "string" && d.wsName.trim() ? d.wsName : undefined,
       };
     } catch { return null; }
   },
@@ -124,7 +121,6 @@ const persistence = {
       blob = JSON.stringify({
         v: 3, entities: s.entities, automations: s.automations, routes: s.routes, records: s.records, tasks: s.tasks, activities: s.activities,
         chats: s.chats, replyTemplates: s.replyTemplates, integrations: s.integrations,
-        users: s.users, wsName: s.wsName,
       });
     } catch (e) {
       if (!storageBroken) {
@@ -237,10 +233,6 @@ function ensurePos(records: Rec[]) {
 export const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 const INT_KEY = "xxlcrm-ints-v1"; // интеграции живут на устройстве отдельно: данные в облаке общие, каналы личные
 const PRIV_KEY = "xxlcrm-priv-v1"; // личная переписка: только на устройстве, в общее пространство не уходит
-/** Стереть с устройства ключи каналов и личную переписку (общий ПК, «выйти и стереть»). */
-export function wipeDeviceSecrets(): void {
-  try { window.localStorage.removeItem(INT_KEY); window.localStorage.removeItem(PRIV_KEY); } catch { /* нет хранилища */ }
-}
 /** Диалог из личного Telegram, который человек НЕ отправлял в CRM явной кнопкой. */
 export const isPrivateChat = (c: Chat) => c.ext?.tgu !== undefined && !c.shared;
 // записи, созданные в ЭТОЙ вкладке: только их пустые карточки убираем сами при закрытии
@@ -283,9 +275,7 @@ export function ensureBdayField(entities: EntityCfg[]) {
     раньше перенос жил только внутри создания пространства, и работа зависала на устройстве. */
 export function localBackup(): DataState | null { return persistence.load(); }
 
-const loaded = persistence.load();
-const hadStored = !!loaded;
-const initial: DataState = loaded ?? { entities: clone(ENTITIES), automations: defaultRules(), routes: defaultRoutes(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
+const initial: DataState = persistence.load() ?? { entities: clone(ENTITIES), automations: defaultRules(), routes: defaultRoutes(), ...seed(), replyTemplates: DEFAULT_TEMPLATES, integrations: defaultIntegrations() };
 ensureBdayField(initial.entities);
 try { const rawInts = window.localStorage.getItem(INT_KEY); if (rawInts) initial.integrations = normalizeInts(JSON.parse(rawInts)); } catch { /* берём integrations из основного пейлоада */ }
 /** Личная переписка лежит на устройстве и переживает вход в облако — в облаке её нет вовсе. */
@@ -299,12 +289,8 @@ function loadPriv(): Chat[] {
 ensurePos(initial.records);
 const st: State = {
   ...initial, currentUserId: "u1", drawerRecordId: null, activeChatId: null,
-  users: initial.users?.some(u => u.id === "u1") ? initial.users : USERS, mode: "local", wsId: null,
-  wsName: initial.wsName ?? "Digital Loft", inviteCode: "", authStage: null, pendingDraft: null, nav: null,
+  users: USERS, mode: "local", wsId: null, wsName: "Digital Loft", inviteCode: "", authStage: null, pendingDraft: null, nav: null,
 };
-// Первый запуск: база из примеров ещё не записана — сохраняем сразу, иначе до первого действия
-// «Копия базы» показывает 0 байт, а вторая вкладка не видит данных.
-if (!hadStored) window.setTimeout(() => { try { persistence.save(st); } catch { /* места нет */ } }, 50);
 
 let version = 0;
 const listeners = new Set<() => void>();
@@ -524,16 +510,6 @@ export function normalizePhone(raw: unknown): string {
   return `+7 ${ten.slice(0, 3)} ${ten.slice(3, 6)}-${ten.slice(6, 8)}-${ten.slice(8, 10)}`;
 }
 const phoneDigits = (v: unknown) => phoneKey(v) ?? "\u0000нет";   // заведомо не совпадёт ни с чем
-// Телефон как телефон: ссылки «позвонить / WhatsApp / Telegram». Только если это похоже
-// на номер (≥10 цифр); «8 916 …» и «916 …» считаем Россией и приводим к +7 — иначе wa.me
-// открывал бы чужую страну.
-export function normalizePhoneView(v: unknown): { digits: string; tel: string; wa: string; tg: string } | null {
-  let d = String(v ?? "").replace(/\D/g, "");
-  if (d.length < 10 || d.length > 15) return null;
-  if (d.length === 11 && d[0] === "8") d = "7" + d.slice(1);
-  if (d.length === 10) d = "7" + d;
-  return { digits: d, tel: `tel:+${d}`, wa: `https://wa.me/${d}`, tg: `https://t.me/+${d}` };
-}
 // Один человек = одна карточка. Ищем в справочниках (разделы без воронки): сделка — не человек,
 // и «узнавать» клиента по телефону, записанному в сделке, нельзя.
 export function findRecordByPhone(phoneRaw?: string, preferEntity = "contacts"): Rec | undefined {
@@ -766,10 +742,6 @@ export const A = {
   },
   // Точное перемещение: карточка встаёт ПЕРЕД beforeId (null = в конец колонки)
   moveStageAt(recId: string, stageId: string, beforeId: string | null) {
-    const rec0 = recById(recId);
-    const stage0 = rec0 && entityCfg(rec0.entityId).stages?.find(x => x.id === stageId);
-    if (!rec0 || !stage0) return;
-    const lostNow = stage0.kind === "lost" && rec0.stageId !== stageId;
     pushHistory("перенос по стадиям");
     mut(s => {
       const r = recById(recId)!;
@@ -800,27 +772,6 @@ export const A = {
         }
       }
     });
-    // Проигрыш без причины — слепая сводка. Поле «Причина отказа» заводим один раз (в том же
-    // шаге отмены, что и перенос), открываем карточку и просим карточку подсветить это поле.
-    // Перенос не блокируем: не ответил — так и останется пустым.
-    if (lostNow) {
-      const e = entityCfg(rec0.entityId);
-      let reason = e.fields.find(f => f.type === "select" && /причин/i.test(f.label));
-      if (!reason) {
-        const labels = ["Дорого", "Передумал", "Не ответил", "Ушёл к конкуренту", "Другое"];
-        const id = A.fieldAdd(e.id, {
-          label: "Причина отказа", type: "select", inTable: false,
-          options: labels.map((l, i) => ({ id: uid("o"), label: l, color: PALETTE[(i + 5) % PALETTE.length] })),
-        });
-        reason = entityCfg(e.id).fields.find(f => f.id === id);
-        queueMicrotask(() => toast("Добавил поле «Причина отказа»", { description: "Укажите, почему сорвалось — сводка покажет, что чаще всего мешает" }));
-      }
-      if (reason) {
-        const fieldId = reason.id;
-        if (st.drawerRecordId !== recId) A.openRecord(recId);
-        window.dispatchEvent(new CustomEvent("xxl:focus-field", { detail: { recId, fieldId } }));
-      }
-    }
   },
   createRecord(entityId: string, values: Record<string, unknown> = {}, stageId?: string, ownerId?: string): string {
     const __id = A.createRecordImpl(entityId, values, stageId, ownerId);
@@ -1279,9 +1230,7 @@ export const A = {
     const demoRecs = st.records.filter(r => r.demo);
     const demoChats = st.chats.filter(c => c.demo);
     const demoTasks = st.tasks.filter(t => t.demo);
-    // Демо-коллеги «Марина» и «Артём» — тоже пример: в локальном режиме команды нет, есть один человек
-    const demoUsers = st.users.filter(u => u.id !== st.currentUserId);
-    if (!demoRecs.length && !demoChats.length && !demoTasks.length && !demoUsers.length) {
+    if (!demoRecs.length && !demoChats.length && !demoTasks.length) {
       toast("Примеров уже нет", { description: "Всё, что здесь есть, — ваше" });
       return;
     }
@@ -1294,15 +1243,9 @@ export const A = {
       s.activities = s.activities.filter(a => !kill.has(a.recordId));
       if (s.drawerRecordId && kill.has(s.drawerRecordId)) s.drawerRecordId = null;
       if (s.activeChatId && !s.chats.some(c => c.id === s.activeChatId)) s.activeChatId = null;
-      // остаётся только текущий пользователь; осиротевшие записи и задачи — ему
-      const me = s.currentUserId;
-      s.users = s.users.filter(u => u.id === me);
-      for (const r of s.records) if (r.ownerId !== me) { r.ownerId = me; }
-      for (const t of s.tasks) if (t.ownerId !== me) { t.ownerId = me; }
-      repairStructure(s); // маршруты «по очереди»/на удалённого сотрудника — к владельцу
     });
-    toast(demoRecs.length ? `Примеры убраны: ${demoRecs.length} ${plural(demoRecs.length, "запись", "записи", "записей")}` : "Демо-коллеги убраны — в команде только вы", {
-      description: demoRecs.length ? "Ваши записи, диалоги и подключения на месте, демо-коллеги убраны. Ctrl+Z вернёт примеры" : "Записи и задачи переназначены на вас",
+    toast(`Примеры убраны: ${demoRecs.length} ${plural(demoRecs.length, "запись", "записи", "записей")}`, {
+      description: "Ваши записи, диалоги и подключения на месте. Ctrl+Z вернёт примеры",
     });
   },
 
@@ -1440,13 +1383,6 @@ export const A = {
   },
 
   // ---------- интеграции и шаблоны ----------
-  // «Чужая личность»: в демо человек входит как «Глеб». Переименовать себя можно сразу,
-  // не дожидаясь облака (там имя живёт в профиле пространства — этот путь не для него).
-  renameMe(name: string) {
-    const n = String(cleanText(name) ?? "").trim().slice(0, 60);
-    if (!n || st.mode !== "local") return;
-    mut(s => { s.users = s.users.map(u => (u.id === s.currentUserId ? { ...u, name: n } : u)); });
-  },
   intPatch(fn: (i: Integrations) => void) { mut(s => fn(s.integrations)); },
   // маршрут приёма: «заявки из этого канала падают туда-то»
   routeUpdate(source: InboundSource, patch: Partial<Route>) {

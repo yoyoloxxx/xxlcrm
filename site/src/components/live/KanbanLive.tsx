@@ -16,6 +16,7 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
   const records = filter ? recordsOf(e.id).filter(filter) : recordsOf(e.id);
   const moneyField = e.fields.find(f => f.type === "money");
   const subtitleField = e.fields.find(f => f.type === "relation");
+  const phoneField = e.fields.find(f => f.type === "phone"); // телефон на карточке — чтобы звонить, не открывая её
 
   const clearDnd = () => { setDragId(null); setSlot(null); };
   // Колонка на тысячу карточек рисуется секундами и замирает при каждом действии.
@@ -66,7 +67,8 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                 const sub = subtitleField ? displayValue(subtitleField, r.values[subtitleField.id], dispCtx()) : "";
                 const linkedChat = getState().chats.find(c => c.recordId === r.id);
                 const lastMsg = linkedChat?.msgs[linkedChat.msgs.length - 1];
-                const snippet = lastMsg ? (lastMsg.out ? "Вы: " : "") + lastMsg.text : sub;
+                const phone = phoneField ? String(r.values[phoneField.id] ?? "").trim() : "";
+                const snippet = phone || (lastMsg ? (lastMsg.out ? "Вы: " : "") + lastMsg.text : sub);
                 return (
                   <div key={r.id} className="relative">
                     {active && slot!.index === i && <DropLine at="top" />}
@@ -154,7 +156,7 @@ export function KanbanLive({ entity: e, filter }: { entity: EntityCfg; filter?: 
                 />
               ) : (
                 <button onClick={() => setQuickCol(st.id)}
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] text-muted-foreground/80 transition-colors hover:bg-foreground/[0.04] hover:text-foreground">
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-foreground/[0.04] hover:text-foreground">
                   <Plus className="size-3.5" /> Добавить
                 </button>
               )}

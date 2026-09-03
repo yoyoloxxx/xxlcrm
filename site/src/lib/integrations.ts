@@ -1,6 +1,6 @@
 // Реальные каналы прямо из браузера: Telegram Bot API, WhatsApp (Green API), MAX Bot API, Tilda (webhook-мост).
 // Токены хранятся только в localStorage этого браузера. Все ошибки — мягкие: тост + статус, тик продолжается.
-import { getState, A, handleIncoming } from "./store";
+import { getState, A, handleIncoming, tabState } from "./store";
 import { tguInit, tguSend } from "./tg-user-lazy";
 import { autoServerIntake } from "./inbound";
 import { toast } from "sonner";
@@ -150,7 +150,7 @@ async function maxTick() {
     const res = await fetch(maxApi("updates", `&limit=30&timeout=0${cfg.marker ? `&marker=${cfg.marker}` : ""}`));
     if (!res.ok) return;
     const data = await res.json();
-    if (typeof data?.marker === "number") A.intPatch(i => { i.max.marker = data.marker; });
+    if (typeof data?.marker === "number" && data.marker !== cfg.marker) A.intPatch(i => { i.max.marker = data.marker; });
     for (const u of data?.updates ?? []) {
       if (u?.update_type !== "message_created") continue;
       const text: string | undefined = u?.message?.body?.text;
@@ -251,11 +251,15 @@ export async function sendChatMessage(chatId: string, text: string) {
 // ---------- движок ----------
 let timer: number | undefined;
 let busy = false;
+// Ведомая вкладка (CRM уже открыта в другой) не должна забирать сообщения из каналов:
+// она их не сохраняет — а Telegram/Green API после подтверждения второй раз не отдадут.
+const passive = () => tabState().follower && getState().mode === "local";
+let tguStarted = false;
 export function initIntegrations() {
   if (timer) return;
-  void tguInit(); // личный Telegram: событийный (MTProto), не поллинг
   timer = window.setInterval(async () => {
-    if (busy) return;
+    if (busy || passive()) return;
+    if (!tguStarted) { tguStarted = true; void tguInit(); } // личный Telegram: событийный (MTProto), не поллинг
     busy = true;
     try { await Promise.all([tgTick(), waTick(), maxTick(), tildaTick()]); } finally { busy = false; }
   }, 4000);
