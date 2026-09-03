@@ -13,7 +13,7 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.22"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.23"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -61,6 +61,25 @@ function parseInstagram(body: Any): Msg | null {
     }
   }
   return null;
+}
+
+// ВКонтакте: Callback API сообщества. Имя собеседника подтягиваем отдельно (users.get), если есть токен.
+function parseVk(body: Any): Msg | null {
+  if (body?.type !== "message_new") return null;
+  const m = body?.object?.message ?? body?.object;
+  const text: string | undefined = m?.text;
+  const peer = Number(m?.peer_id ?? m?.from_id);
+  if (!text || !peer) return null;
+  return { ext: { vk: peer }, name: "ВКонтакте · " + peer, text };
+}
+// Авито: Messenger API v3 (вебхук). Свои же исходящие (author_id = наш аккаунт) пропускаем в ingest.
+function parseAvito(body: Any): Msg | null {
+  const v = body?.payload?.value;
+  if (body?.payload?.type !== "message" || !v) return null;
+  const text: string | undefined = v?.content?.text;
+  const chat: string | undefined = v?.chat_id;
+  if (!text || !chat) return null;
+  return { ext: { avito: String(chat) }, name: "Авито · " + String(v.author_id ?? ""), text };
 }
 
 // MAX Bot API — зеркально Telegram
@@ -378,26 +397,167 @@ function sourceOption(e: Any, src: string): { fieldId: string; optionId: string 
   const f = e.fields?.find((x: Any) => x.type === "select" && (x.id === "source" || /источник|канал/i.test(x.label ?? "")));
   if (!f?.options?.length) return undefined;
   const want = src === "wa" ? /whatsapp|ватс/i : src === "tg" ? /telegram|телеграм/i : src === "max" ? /max|макс/i
-    : src === "ig" ? /instagram|инстаг/i : /сайт|tilda|тильда|форма/i;
+    : src === "ig" ? /instagram|инстаг/i : src === "vk" ? /вконтакте|vk|вк/i : src === "avito" ? /авито|avito/i : /сайт|tilda|тильда|форма/i;
   const o = f.options.find((x: Any) => want.test(x.label ?? ""));
   return o ? { fieldId: f.id, optionId: o.id } : undefined;
 }
 
-const srcName = (s: string) => (s === "tg" ? "Telegram" : s === "wa" ? "WhatsApp" : s === "max" ? "MAX" : s === "tilda" ? "сайт" : s === "ig" ? "Instagram" : s);
+const srcName = (s: string) => (s === "tg" ? "Telegram" : s === "wa" ? "WhatsApp" : s === "max" ? "MAX" : s === "tilda" ? "сайт" : s === "ig" ? "Instagram" : s === "vk" ? "ВКонтакте" : s === "avito" ? "Авито" : s);
+
+// ---------- отправка ответов через сервер (Meta / VK / Avito): токены не покидают базу ----------
+async function avitoToken(ws: string, row: Any): Promise<string> {
+  const meta: Any = row?.meta ?? {};
+  if (row?.bot_token && Number(meta.token_exp ?? 0) > Date.now() + 60_000) return String(row.bot_token);
+  const r = await fetch("https://api.avito.ru/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: String(meta.client_id ?? ""), client_secret: String(meta.client_secret ?? "") }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d?.access_token) throw new Error("Avito: не выдал токен — проверьте client_id/client_secret");
+  const token = String(d.access_token);
+  await db.from("channel_hooks").update({ bot_token: token, meta: { ...meta, token_exp: Date.now() + Number(d.expires_in ?? 86400) * 1000 } })
+    .eq("workspace_id", ws).eq("source", "avito");
+  return token;
+}
+async function sendOut(ws: string, src: string, to: string, text: string): Promise<Any> {
+  const { data: row } = await db.from("channel_hooks").select("bot_token, meta").eq("workspace_id", ws).eq("source", src).maybeSingle();
+  if (!row) throw new Error("канал не настроен");
+  if (src === "ig") {
+    if (!row.bot_token) throw new Error("нет токена страницы Meta — вставьте его в карточке Instagram");
+    const r = await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(row.bot_token)}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ recipient: { id: to }, message: { text }, messaging_type: "RESPONSE" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d?.error) throw new Error("Meta: " + String(d?.error?.message ?? r.status).slice(0, 120));
+    return { ok: true, id: d?.message_id };
+  }
+  if (src === "vk") {
+    if (!row.bot_token) throw new Error("нет токена сообщества ВКонтакте");
+    const q = new URLSearchParams({ peer_id: to, message: text, random_id: String(Date.now() % 2147483647), access_token: String(row.bot_token), v: "5.199" });
+    const r = await fetch("https://api.vk.com/method/messages.send", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: q });
+    const d = await r.json().catch(() => ({}));
+    if (d?.error) throw new Error("VK: " + String(d.error.error_msg ?? d.error.error_code).slice(0, 120));
+    return { ok: true, id: d?.response };
+  }
+  if (src === "avito") {
+    const meta: Any = row.meta ?? {};
+    const token = await avitoToken(ws, row);
+    const r = await fetch(`https://api.avito.ru/messenger/v1/accounts/${meta.user_id}/chats/${to}/messages`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify({ message: { text }, type: "text" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("Avito: " + String(d?.error?.message ?? d?.message ?? r.status).slice(0, 120));
+    return { ok: true, id: d?.id };
+  }
+  throw new Error("этот канал не умеет отправлять через сервер");
+}
+// Подключение Авито: client_credentials → id аккаунта → регистрация вебхука на наш приёмник
+async function avitoSetup(ws: string, secret: string, clientId: string, clientSecret: string): Promise<Any> {
+  await db.from("channel_hooks").update({ meta: { client_id: clientId, client_secret: clientSecret }, bot_token: null }).eq("workspace_id", ws).eq("source", "avito");
+  const { data: row } = await db.from("channel_hooks").select("bot_token, meta").eq("workspace_id", ws).eq("source", "avito").maybeSingle();
+  const token = await avitoToken(ws, row);
+  const me = await fetch("https://api.avito.ru/core/v1/accounts/self", { headers: { authorization: "Bearer " + token } }).then(r => r.json()).catch(() => ({}));
+  const userId = me?.id;
+  if (!userId) throw new Error("Avito: не удалось узнать id аккаунта");
+  const hookUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/hook?ws=${ws}&src=avito&k=${secret}`;
+  const reg = await fetch("https://api.avito.ru/messenger/v3/webhook", {
+    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify({ url: hookUrl }),
+  });
+  if (!reg.ok) throw new Error("Avito: вебхук не зарегистрирован (HTTP " + reg.status + ")");
+  const { data: cur } = await db.from("channel_hooks").select("meta").eq("workspace_id", ws).eq("source", "avito").maybeSingle();
+  await db.from("channel_hooks").update({ meta: { ...(cur?.meta ?? {}), user_id: String(userId) } }).eq("workspace_id", ws).eq("source", "avito");
+  return { ok: true, user_id: String(userId) };
+}
+// Кто зовёт: по JWT пользователя (заголовок Authorization) → участник ли он пространства
+async function callerIsMember(req: Request, ws: string): Promise<boolean> {
+  const auth = req.headers.get("authorization") ?? "";
+  const jwt = auth.replace(/^Bearer\s+/i, "");
+  if (!jwt) return false;
+  const anon = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", { auth: { persistSession: false } });
+  const { data } = await anon.auth.getUser(jwt);
+  const uid = data?.user?.id;
+  if (!uid) return false;
+  const { data: m } = await db.from("members").select("user_id").eq("workspace_id", ws).eq("user_id", uid).maybeSingle();
+  return !!m;
+}
+
+// ---------- утренний дайджест: pg_cron → сюда по ключу из app_settings ----------
+const MSK = 3 * 3600_000;
+async function digest(): Promise<Any> {
+  const { data: tg } = await db.from("notify_targets").select("workspace_id");
+  const wss = [...new Set((tg ?? []).map((t: Any) => String(t.workspace_id)))];
+  let sent = 0;
+  for (const ws of wss) {
+    const { data: off } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", "digest").maybeSingle();
+    if (off?.secret === "off") continue;
+    const now = Date.now();
+    const mskNow = new Date(now + MSK);
+    const dayEnd = Date.UTC(mskNow.getUTCFullYear(), mskNow.getUTCMonth(), mskNow.getUTCDate() + 1) - MSK; // конец сегодняшнего дня по Москве
+    const { data: tasks } = await db.from("tasks").select("title, owner_id, due, record_id").eq("workspace_id", ws).eq("done", false).lt("due", dayEnd).order("due").limit(500);
+    const { data: mems } = await db.from("members").select("user_id, name").eq("workspace_id", ws);
+    const { count: fresh } = await db.from("records").select("id", { count: "exact", head: true }).eq("workspace_id", ws).gt("created_at", now - 86400_000);
+    const list: Any[] = tasks ?? [];
+    if (!list.length && !fresh) continue;
+    const dayStart = dayEnd - 86400_000;                       // начало сегодняшнего дня по Москве
+    const overdue = list.filter(t => Number(t.due) < dayStart);
+    const byOwner = new Map<string, Any[]>();
+    for (const t of list) { const k = String(t.owner_id ?? ""); byOwner.set(k, [...(byOwner.get(k) ?? []), t]); }
+    const nameOf = (id: string) => (mems ?? []).find((m: Any) => String(m.user_id) === id)?.name ?? "без ответственного";
+    const d = mskNow;
+    const lines = [
+      `Доброе утро · ${d.getUTCDate()}.${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+      `Задач на сегодня: ${list.length}${overdue.length ? ` (просрочено: ${overdue.length})` : ""}${fresh ? ` · новых заявок за сутки: ${fresh}` : ""}`,
+    ];
+    for (const [uid, ts] of byOwner) {
+      const od = ts.filter(t => overdue.includes(t)).length;
+      lines.push(`\n${nameOf(uid)}: ${ts.length}${od ? ` (${od} просроч.)` : ""}`);
+      for (const t of ts.slice(0, 5)) lines.push(`• ${String(t.title).slice(0, 60)}`);
+      if (ts.length > 5) lines.push(`…и ещё ${ts.length - 5}`);
+    }
+    await notify(ws, lines.join("\n").slice(0, 3900));
+    sent++;
+  }
+  return { ok: true, workspaces: wss.length, sent };
+}
 
 // ---------- точка входа ----------
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const url = new URL(req.url);
   const ws = url.searchParams.get("ws") ?? "";
+  // утренний дайджест по ключу из закрытой таблицы (дёргает pg_cron)
+  const dk = url.searchParams.get("digest");
+  if (dk) {
+    const { data: st } = await db.from("app_settings").select("value").eq("key", "digest_key").maybeSingle();
+    if (!st?.value || st.value !== dk) return json({ ok: false, error: "bad key" }, 401);
+    try { return json(await digest()); } catch (e) { return json({ ok: false, error: String((e as Error).message ?? e).slice(0, 200) }, 500); }
+  }
   // проба: «какая версия функции стоит и какие источники понимает»
-  if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda", "ig"] });
+  if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda", "ig", "vk", "avito"], send: ["ig", "vk", "avito"] });
   const src = url.searchParams.get("src") ?? "tg";
+  // Действия от имени участника (ответ клиенту, подключение Авито): по JWT пользователя, без секретов в браузере
+  const action = url.searchParams.get("action");
+  if (action) {
+    if (req.method !== "POST") return json({ ok: false, error: "POST" }, 405);
+    if (!(await callerIsMember(req, ws))) return json({ ok: false, error: "not a member" }, 403);
+    const body = await readPayload(req);
+    try {
+      if (action === "send") return json(await sendOut(ws, src, String(body?.to ?? ""), clean(body?.text, 4000)));
+      if (action === "setup" && src === "avito") {
+        const { data: h } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", "avito").maybeSingle();
+        if (!h?.secret) return json({ ok: false, error: "сначала создайте приёмник" }, 400);
+        return json(await avitoSetup(ws, String(h.secret), String(body?.client_id ?? ""), String(body?.client_secret ?? "")));
+      }
+      return json({ ok: false, error: "unknown action" }, 400);
+    } catch (e) { return json({ ok: false, error: String((e as Error).message ?? e).slice(0, 200) }, 400); }
+  }
   // Telegram подписывает запросы заголовком — параметр k в адресе для него не принимаем:
   // адрес вебхука виден в getWebhookInfo, а заголовок знает только Telegram.
   const key = src === "tg" ? (req.headers.get("x-telegram-bot-api-secret-token") ?? "") : (req.headers.get("x-hook-key") ?? url.searchParams.get("k") ?? "");
 
-  const { data: hook } = await db.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", src).maybeSingle();
+  const { data: hook } = await db.from("channel_hooks").select("secret, meta").eq("workspace_id", ws).eq("source", src).maybeSingle();
   // Проверка вебхука Meta (Instagram): GET с hub.challenge, надо вернуть challenge голым текстом.
   // Verify token человек вводит в Meta тот же, что и секрет приёмника — сверяем и его.
   if (req.method === "GET" && url.searchParams.get("hub.mode") === "subscribe") {
@@ -411,8 +571,14 @@ Deno.serve(async (req: Request) => {
   const payload = await readPayload(req);
   // Идемпотентность: Telegram повторяет доставку, если не увидел 200 вовремя. Раньше повтор
   // плодил второй такой же диалог и накручивал счётчик непрочитанных.
+  // ВКонтакте сначала проверяет адрес: на type=confirmation надо ответить строкой из настроек сообщества
+  if (src === "vk" && payload?.type === "confirmation") {
+    const conf = String((hook as Any)?.meta?.confirm ?? "");
+    return new Response(conf, { status: 200, headers: { "content-type": "text/plain", ...CORS } });
+  }
   const dedupId = String(payload?.update_id ?? payload?.idMessage ?? payload?.message?.body?.mid
-    ?? payload?.entry?.[0]?.messaging?.[0]?.message?.mid ?? payload?.tranid ?? payload?.message_id ?? payload?.marker ?? "");
+    ?? payload?.entry?.[0]?.messaging?.[0]?.message?.mid ?? payload?.tranid ?? payload?.message_id ?? payload?.marker
+    ?? (src === "vk" ? payload?.object?.message?.id ?? payload?.event_id : "") ?? (src === "avito" ? payload?.payload?.value?.id ?? payload?.id : "") ?? "");
   if (dedupId) {
     const { data: seen, error: seenErr } = await db.from("inbound")
       .select("id").eq("workspace_id", ws).eq("source", src).eq("ext_key", dedupId).limit(1);
@@ -435,8 +601,23 @@ Deno.serve(async (req: Request) => {
     : src === "wa" ? parseWhatsApp(payload)
     : src === "max" ? parseMax(payload)
     : src === "ig" ? (parseInstagram(payload) ?? parseForm(payload)) // Meta-вебхук либо пересыльщик с JSON {name, phone, text}
+    : src === "vk" ? parseVk(payload)
+    : src === "avito" ? parseAvito(payload)
     : parseForm(payload);
-  if (!msg || (!msg.text && !msg.name)) return json({ ok: true, skipped: true });
+  // VK ждёт в ответ голое «ok», Avito — 200: иначе оба будут слать повторы
+  const done = (b: Any, status = 200) => (src === "vk" ? new Response("ok", { status: 200, headers: { "content-type": "text/plain", ...CORS } }) : json(b, status));
+  if (!msg || (!msg.text && !msg.name)) return done({ ok: true, skipped: true });
+  // Авито присылает и НАШИ ответы: автор — наш аккаунт → это не входящее
+  if (src === "avito" && String(payload?.payload?.value?.author_id ?? "") === String((hook as Any)?.meta?.user_id ?? "-")) return done({ ok: true, own: true });
+  // ВКонтакте: имя собеседника — отдельным запросом, если есть токен сообщества
+  if (src === "vk" && msg.ext.vk) {
+    const { data: vrow } = await db.from("channel_hooks").select("bot_token").eq("workspace_id", ws).eq("source", "vk").maybeSingle();
+    if (vrow?.bot_token) {
+      const u = await fetch(`https://api.vk.com/method/users.get?user_ids=${msg.ext.vk}&access_token=${encodeURIComponent(vrow.bot_token)}&v=5.199`).then(r => r.json()).catch(() => null);
+      const p = u?.response?.[0];
+      if (p) msg.name = [p.first_name, p.last_name].filter(Boolean).join(" ") || msg.name;
+    }
+  }
 
   let processed = true, error: string | null = null;
   try {
@@ -462,5 +643,5 @@ Deno.serve(async (req: Request) => {
   // Функцию могли выкатить раньше, чем выполнили SQL-миграцию: тогда колонки ext_key нет,
   // и раньше из-за этого переставал писаться ВЕСЬ журнал входящих. Пишем без неё.
   if (logged.error) await db.from("inbound").insert(logRow);
-  return json(processed ? { ok: true } : { ok: false, queued: true, error }, processed ? 200 : 202);
+  return done(processed ? { ok: true } : { ok: false, queued: true, error }, processed ? 200 : 202);
 });
