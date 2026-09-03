@@ -358,17 +358,22 @@ function NotifyCard() {
   const [list, setList] = useState<{ chat_id: string; name: string | null }[]>([]);
   const bot = s.integrations.tg.botName ?? "";
   const [secret, setSecret] = useState<string | null>(null);
+  const [srvNew, setSrvNew] = useState<boolean | null>(null); // умеет ли развёрнутая функция секретную ссылку (v0.22+)
   const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
   const refresh = () => { void notifyTargets().then(setList); };
-  // ссылка подписки содержит СЕКРЕТ пространства (не id) — создаёт/читает его только владелец
+  // ссылка подписки содержит СЕКРЕТ пространства (не id) — создаёт/читает его только владелец.
+  // Пока на сервере старая функция, ссылка строится по-старому — иначе подписка не сработает.
   useEffect(() => {
     if (s.mode !== "cloud") return;
     refresh();
     if (owner) void ensureNotifySecret().then(setSecret);
+    void fetch(`${SUPA_URL}/functions/v1/hook`).then(r => r.json())
+      .then(d => setSrvNew(Number(String(d?.version ?? "0").replace(/[^\d.]/g, "")) >= 0.22))
+      .catch(() => setSrvNew(false));
   }, [s.mode, s.wsId, owner]);
   if (s.mode !== "cloud" || s.integrations.tg.status !== "ok" || !bot) return null;
   if (!owner) return null;
-  const link = secret ? notifyLink(bot, secret) : "";
+  const link = srvNew === false ? notifyLink(bot, (s.wsId ?? "").slice(0, 8)) : secret ? notifyLink(bot, secret) : "";
   return (
     <div data-ch="notify" className="mt-2 rounded-md border p-3">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
