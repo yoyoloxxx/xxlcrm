@@ -211,6 +211,154 @@ export async function igDisableReceiver(): Promise<boolean> {
   return true;
 }
 
+// ---------- ответы через сервер: Instagram (Meta), ВКонтакте, Авито ----------
+// Токены этих сервисов живут только в базе (channel_hooks, читает владелец и функция).
+// Браузер шлёт «кому и что» с JWT пользователя — функция проверяет, что он участник пространства.
+export type ServerSendSrc = "ig" | "vk" | "avito";
+export async function serverSend(src: ServerSendSrc, to: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  const ws = getState().wsId;
+  if (!ws) return { ok: false, error: "ответы через сервер работают в общем пространстве" };
+  const jwt = (await supa.auth.getSession()).data.session?.access_token;
+  if (!jwt) return { ok: false, error: "сессия истекла — войдите заново" };
+  try {
+    const r = await fetch(`${SUPA_URL}/functions/v1/hook?ws=${ws}&src=${src}&action=send`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + jwt },
+      body: JSON.stringify({ to, text }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d?.ok) return { ok: false, error: String(d?.error ?? `HTTP ${r.status}`).slice(0, 140) };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: "нет связи с сервером: " + String((e as Error).message ?? e).slice(0, 80) }; }
+}
+
+// Токен страницы Meta для ответов в Instagram — сохраняется в базе, в браузере не остаётся
+export async function igSetPageToken(token: string): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const secret = await ensureHookSecret("ig");
+  if (!secret) return false;
+  const t = token.trim();
+  const { error } = await supa.from("channel_hooks").update({ bot_token: t || null }).eq("workspace_id", ws).eq("source", "ig");
+  if (error) { toast.error("Не удалось сохранить токен", { description: error.message.slice(0, 90) }); return false; }
+  A.intPatch(i => { i.ig.status = "ok"; i.ig.error = undefined; i.ig.canSend = !!t; });
+  toast.success(t ? "Ответы в Instagram включены" : "Токен страницы удалён — снова только приём");
+  return true;
+}
+/** Есть ли у приёмника Instagram токен страницы (для показа «ответы включены» при открытии) */
+export async function igHasPageToken(): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const { data } = await supa.from("channel_hooks").select("bot_token").eq("workspace_id", ws).eq("source", "ig").maybeSingle();
+  const has = !!data?.bot_token;
+  A.intPatch(i => { if (i.ig.canSend !== has) i.ig.canSend = has; });
+  return has;
+}
+
+// ВКонтакте: Callback API сообщества. Адрес сервера — наш приёмник; строку подтверждения
+// функция отдаёт на проверочный запрос VK; токен сообщества нужен для ответов и имён.
+export async function vkReceiver(): Promise<{ url: string; secret: string } | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const secret = await getHookSecret("vk");
+  if (!secret) return null;
+  A.intPatch(i => { if (i.vk.status !== "ok") { i.vk.status = "ok"; i.vk.error = undefined; } });
+  return { url: hookUrl(ws, "vk", secret), secret };
+}
+export async function vkSetup(token: string, confirm: string): Promise<{ url: string } | null> {
+  const ws = getState().wsId;
+  if (!ws) { toast.error("Сначала войдите в общее пространство", { description: "ВКонтакте принимает сервер — нужен аккаунт" }); return null; }
+  if (!(await serverSupports("vk"))) return null;
+  const secret = await ensureHookSecret("vk");
+  if (!secret) return null;
+  const t = token.trim(), c = confirm.trim();
+  // пустой токен при обновлении = «оставить прежний»: человек мог поменять только строку подтверждения
+  const patch: { meta: { confirm: string }; bot_token?: string } = { meta: { confirm: c } };
+  if (t) patch.bot_token = t;
+  const { error } = await supa.from("channel_hooks").update(patch).eq("workspace_id", ws).eq("source", "vk");
+  if (error) { toast.error("Не удалось сохранить настройки ВКонтакте", { description: error.message.slice(0, 90) }); return null; }
+  A.intPatch(i => { i.vk = { status: "ok" }; });
+  toast.success("Приёмник ВКонтакте готов", { description: "Вставьте адрес в Callback API сообщества и нажмите «Подтвердить»" });
+  return { url: hookUrl(ws, "vk", secret) };
+}
+export async function vkDisable(): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const { error } = await supa.from("channel_hooks").delete().eq("workspace_id", ws).eq("source", "vk");
+  if (error) { toast.error("Не удалось выключить приёмник", { description: error.message.slice(0, 90) }); return false; }
+  A.intPatch(i => { i.vk = { status: "off" }; });
+  toast("Приёмник ВКонтакте выключен", { description: "Старый адрес больше не принимает" });
+  return true;
+}
+
+// Авито: client_id/client_secret приложения → функция сама получает токен, узнаёт id аккаунта
+// и регистрирует вебхук мессенджера на наш приёмник. Секрет приложения в браузере не хранится.
+export async function avitoSetup(clientId: string, clientSecret: string): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) { toast.error("Сначала войдите в общее пространство", { description: "Авито принимает сервер — нужен аккаунт" }); return false; }
+  if (!(await serverSupports("avito"))) return false;
+  const secret = await ensureHookSecret("avito");
+  if (!secret) return false;
+  const jwt = (await supa.auth.getSession()).data.session?.access_token;
+  if (!jwt) { toast.error("Сессия истекла — войдите заново"); return false; }
+  A.intPatch(i => { i.avito = { status: "connecting" }; });
+  try {
+    const r = await fetch(`${SUPA_URL}/functions/v1/hook?ws=${ws}&src=avito&action=setup`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + jwt },
+      body: JSON.stringify({ client_id: clientId.trim(), client_secret: clientSecret.trim() }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d?.ok) throw new Error(String(d?.error ?? `HTTP ${r.status}`));
+    A.intPatch(i => { i.avito = { status: "ok", userId: String(d.user_id ?? "") }; });
+    toast.success("Авито подключён", { description: "Сообщения из объявлений приходят на сервер — даже при закрытом браузере" });
+    return true;
+  } catch (e) {
+    const msg = String((e as Error).message ?? e).slice(0, 140);
+    A.intPatch(i => { i.avito = { status: "error", error: msg }; });
+    toast.error("Авито: " + msg);
+    return false;
+  }
+}
+export async function avitoReceiver(): Promise<{ userId: string } | null> {
+  const ws = getState().wsId;
+  if (!ws) return null;
+  const { data } = await supa.from("channel_hooks").select("meta").eq("workspace_id", ws).eq("source", "avito").maybeSingle();
+  const userId = (data?.meta as { user_id?: string } | null)?.user_id;
+  if (!userId) return null;
+  A.intPatch(i => { if (i.avito.status !== "ok") i.avito = { status: "ok", userId: String(userId) }; });
+  return { userId: String(userId) };
+}
+export async function avitoDisable(): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const { error } = await supa.from("channel_hooks").delete().eq("workspace_id", ws).eq("source", "avito");
+  if (error) { toast.error("Не удалось отключить Авито", { description: error.message.slice(0, 90) }); return false; }
+  A.intPatch(i => { i.avito = { status: "off" }; });
+  toast("Авито отключён", { description: "Вебхук в Авито можно удалить в кабинете разработчика" });
+  return true;
+}
+
+// ---------- утренний дайджест задач в Telegram ----------
+// Сервер шлёт его в 08:00 по Москве всем, кто подписан на уведомления. Выключатель — строка
+// channel_hooks «digest» со значением off; нет строки = включён.
+export async function digestEnabled(): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  const { data } = await supa.from("channel_hooks").select("secret").eq("workspace_id", ws).eq("source", "digest").maybeSingle();
+  return data?.secret !== "off";
+}
+export async function digestSet(on: boolean): Promise<boolean> {
+  const ws = getState().wsId;
+  if (!ws) return false;
+  // «включён» — случайная строка, а не слово on: строка channel_hooks по дизайну проверяется как ключ приёмника
+  const { error } = await supa.from("channel_hooks").upsert({ workspace_id: ws, source: "digest", secret: on ? rnd().slice(0, 16) : "off" });
+  if (error) {
+    toast.error("Не удалось переключить дайджест", { description: /policy|permission|denied/i.test(error.message) ? "Это может только владелец пространства" : error.message.slice(0, 90) });
+    return false;
+  }
+  toast.success(on ? "Утренний дайджест включён" : "Утренний дайджест выключен", { description: on ? "Каждый день в 08:00 по Москве — задачи на сегодня и просроченные, по людям" : undefined });
+  return true;
+}
+
 // ---------- «Проверить связь»: честная диагностика канала одним нажатием ----------
 // Отвечает на главный вопрос «работает или нет — и почему нет», без чтения документации.
 export async function channelCheck(src: "tg" | "wa" | "max"): Promise<{ ok: boolean; note: string }> {

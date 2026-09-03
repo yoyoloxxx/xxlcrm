@@ -1,9 +1,9 @@
 // Живые секции настроек: интеграции каналов и шаблоны ответов
 import { useEffect, useState } from "react";
 import { plural, relTime, type InboundSource, type IntStatus } from "@/lib/model";
-import { useApp, A, storageState, routeSummary, setAuthStage } from "@/lib/store";
+import { useApp, A, storageState, routeSummary, setAuthStage, getState, isPrivateChat } from "@/lib/store";
 import { tgConnect, waConnect, maxConnect, tildaCreateHook, tildaHookUrl } from "@/lib/integrations";
-import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove, channelCheck, igEnsureReceiver, igReceiver, igDisableReceiver, ensureNotifySecret, rotateNotifySecret } from "@/lib/inbound";
+import { tgUseServer, tgUsePolling, waUseServer, waUsePolling, maxUseServer, maxUsePolling, ensureHookSecret, getHookSecret, rotateHookSecret, hookUrl, notifyLink, notifyTargets, notifyRemove, channelCheck, igEnsureReceiver, igReceiver, igDisableReceiver, ensureNotifySecret, rotateNotifySecret, igSetPageToken, igHasPageToken, vkReceiver, vkSetup, vkDisable, avitoSetup, avitoReceiver, avitoDisable, digestEnabled, digestSet } from "@/lib/inbound";
 import { Switch } from "@/components/ui/switch";
 import { tguStartLogin, tguSubmitCode, tguSubmitPassword, tguCancelLogin, tguDisconnect, tguResync, TG_APP } from "@/lib/tg-user-lazy";
 import { Input } from "@/components/ui/input";
@@ -76,6 +76,8 @@ const WHERE: Record<string, { name: string; url: string; go: string; hint: strin
   wa:   { name: "WhatsApp", url: "https://console.green-api.com/", go: "Открыть кабинет Green API", hint: "инстанс → QR → idInstance и токен" },
   max:  { name: "MAX", url: "https://max.ru/masterbot", go: "Открыть @MasterBot в MAX", hint: "команда /create → токен" },
   ig:   { name: "Instagram", url: "https://developers.facebook.com/apps/", go: "Открыть кабинет Meta", hint: "приложение → Instagram → Webhooks" },
+  vk:   { name: "ВКонтакте", url: "https://vk.com/groups?tab=admin", go: "Открыть свои сообщества", hint: "Управление → Работа с API → Callback API" },
+  avito:{ name: "Авито", url: "https://developers.avito.ru/applications", go: "Открыть кабинет разработчика Авито", hint: "приложение → client_id и client_secret" },
   site: { name: "Сайт (форма)", url: "https://tilda.cc/projects/", go: "Открыть Тильду", hint: "Настройки сайта → Формы → Webhook" },
 };
 
@@ -89,9 +91,11 @@ function SetupList() {
     wa: i.wa.status === "ok",
     max: i.max.status === "ok",
     ig: i.ig.status === "ok",
+    vk: i.vk.status === "ok",
+    avito: i.avito.status === "ok",
     site: i.tilda.status === "ok",
   };
-  const rows = ["tg", "wa", "max", "ig", "site"];
+  const rows = ["tg", "wa", "max", "ig", "vk", "avito", "site"];
   const left = rows.filter(r => !done[r]).length;
   return (
     <div className="mt-2.5 rounded-md border p-3" style={{ borderColor: "hsl(var(--brass) / 0.45)" }}>
@@ -109,7 +113,7 @@ function SetupList() {
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-dashed px-2.5 py-2">
           <span className="min-w-0 flex-1 text-[11.5px] leading-snug text-muted-foreground">
             <b className="font-medium text-foreground">Сначала войдите в аккаунт</b> — без него приём работает только при открытой вкладке,
-            а Instagram и постоянный приёмник с сайта недоступны совсем.
+            а Instagram, ВКонтакте, Авито и постоянный приёмник с сайта недоступны совсем.
           </span>
           <Button className="h-8 shrink-0 text-[12px]" onClick={() => setAuthStage("auth")}>Войти</Button>
         </div>
@@ -359,6 +363,8 @@ function NotifyCard() {
   const bot = s.integrations.tg.botName ?? "";
   const [secret, setSecret] = useState<string | null>(null);
   const [srvNew, setSrvNew] = useState<boolean | null>(null); // умеет ли развёрнутая функция секретную ссылку (v0.22+)
+  const [srvVer, setSrvVer] = useState(0);
+  const [digest, setDigest] = useState<boolean | null>(null);
   const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
   const refresh = () => { void notifyTargets().then(setList); };
   // ссылка подписки содержит СЕКРЕТ пространства (не id) — создаёт/читает его только владелец.
@@ -366,9 +372,9 @@ function NotifyCard() {
   useEffect(() => {
     if (s.mode !== "cloud") return;
     refresh();
-    if (owner) void ensureNotifySecret().then(setSecret);
+    if (owner) { void ensureNotifySecret().then(setSecret); void digestEnabled().then(setDigest); }
     void fetch(`${SUPA_URL}/functions/v1/hook`).then(r => r.json())
-      .then(d => setSrvNew(Number(String(d?.version ?? "0").replace(/[^\d.]/g, "")) >= 0.22))
+      .then(d => { const v = Number(String(d?.version ?? "0").replace(/[^\d.]/g, "")); setSrvNew(v >= 0.22); setSrvVer(v); })
       .catch(() => setSrvNew(false));
   }, [s.mode, s.wsId, owner]);
   if (s.mode !== "cloud" || s.integrations.tg.status !== "ok" || !bot) return null;
@@ -409,6 +415,19 @@ function NotifyCard() {
           ))}
         </div>
       )}
+      {/* Утренний дайджест: сервер по расписанию собирает задачи на день и шлёт тем же получателям */}
+      <label data-digest className={cn("mt-2 flex items-center justify-between gap-3 rounded-md border border-dashed p-2.5", srvVer >= 0.23 ? "cursor-pointer" : "opacity-60")}>
+        <span>
+          <span className="block text-[12px] font-medium">Утренний дайджест задач{digest ? " — включён" : ""}</span>
+          <span className="block text-[11px] leading-snug text-muted-foreground">
+            {srvVer && srvVer < 0.23 ? "Появится после обновления серверной функции"
+              : list.length ? "Каждый день в 08:00 по Москве: задачи на сегодня и просроченные — по каждому сотруднику, плюс сколько заявок пришло за сутки. Получают все, кто подписан выше."
+              : "Сначала подключите уведомления — дайджест приходит тем же получателям, каждый день в 08:00 по Москве."}
+          </span>
+        </span>
+        <Switch checked={!!digest} disabled={digest === null || srvVer < 0.23}
+          onCheckedChange={async v => { setDigest(v); if (!(await digestSet(v))) setDigest(!v); }} />
+      </label>
     </div>
   );
 }
@@ -422,10 +441,12 @@ function IgCard() {
   const [rec, setRec] = useState<{ url: string; secret: string } | null>(null);
   const [srvIg, setSrvIg] = useState<boolean>(false);
   const [busy, setBusy] = useState(false);
+  const [pageToken, setPageToken] = useState("");
+  const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
   useEffect(() => {
     if (s.mode !== "cloud" || !s.wsId) { setRec(null); return; }
     let live = true;
-    void igReceiver().then(r => { if (live) setRec(r); });
+    void igReceiver().then(r => { if (live) setRec(r); if (r) void igHasPageToken(); });
     void fetch(`${SUPA_URL}/functions/v1/hook`).then(r => r.json())
       .then(d => { if (live) setSrvIg(Array.isArray(d?.sources) && d.sources.includes("ig")); })
       .catch(() => { /* сети нет — считаем, что рано */ });
@@ -435,7 +456,7 @@ function IgCard() {
     <div data-ch="ig" className="mt-2 rounded-md border p-3">
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
         <InstaIcon className="size-3.5 text-muted-foreground" /> Instagram Direct
-        <Status st={rec ? "ok" : ig.status === "ok" ? "connecting" : ig.status} okText="приёмник работает" />
+        <Status st={rec ? "ok" : ig.status === "ok" ? "connecting" : ig.status} okText={ig.canSend ? "приём и ответы" : "приёмник работает"} />
         <RouteChip src="ig" />
       </div>
       {s.mode !== "cloud" ? (
@@ -491,8 +512,20 @@ function IgCard() {
             ) : (
               <>Прямой приём от Meta (без пересыльщика) включится после ближайшего обновления серверной функции — код уже в проекте, шаги появятся здесь сами. Пока работает путь из шага 1.</>
             ),
-            <>Ответы в Instagram пока пишите из самого приложения — в CRM приходит приём; отправку через Meta добавлю следом.</>,
+            ig.canSend
+              ? <>Ответы включены: пишете во «Входящих» — сервер отправляет через Meta от имени вашей страницы. Токен лежит в базе пространства, в браузере его нет.</>
+              : <>Чтобы <b>отвечать из CRM</b>: в том же приложении Meta → Instagram → «Generate token» для вашего аккаунта (права <code className="font-mono2 text-[10.5px]">instagram_business_manage_messages</code>) → вставьте токен ниже.</>,
           ]} />
+          {owner && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Input className="h-9 min-w-[200px] flex-1 text-[12.5px]" type="password" placeholder={ig.canSend ? "токен сохранён · вставьте новый, чтобы заменить" : "токен страницы Meta для ответов"}
+                value={pageToken} onChange={e => setPageToken(e.target.value)} data-ig-token />
+              <Button className="h-9" disabled={!pageToken.trim() || busy} onClick={async () => { setBusy(true); if (await igSetPageToken(pageToken)) setPageToken(""); setBusy(false); }}>
+                {ig.canSend ? "Заменить токен" : "Включить ответы"}
+              </Button>
+              {ig.canSend && <Button variant="outline" className="h-9 text-[12px]" onClick={() => void igSetPageToken("")}>Убрать токен</Button>}
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Go href={WHERE.ig.url}>{WHERE.ig.go}</Go>
             <Go href="https://developers.facebook.com/docs/messenger-platform/instagram/get-started" dim>Инструкция Meta</Go>
@@ -501,6 +534,170 @@ function IgCard() {
               if (await igDisableReceiver()) setRec(null);
             }}>Отключить</Button>
           </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ВКонтакте: Callback API сообщества → наш серверный приёмник. Токен сообщества и строка
+// подтверждения лежат в базе пространства; ответы клиентам уходят через сервер.
+function VkCard() {
+  const s = useApp();
+  const vk = s.integrations.vk;
+  const [rec, setRec] = useState<{ url: string; secret: string } | null>(null);
+  const [token, setToken] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
+  useEffect(() => {
+    if (s.mode !== "cloud" || !s.wsId) { setRec(null); return; }
+    let live = true;
+    void vkReceiver().then(r => { if (live) setRec(r); });
+    return () => { live = false; };
+  }, [s.mode, s.wsId]);
+  const connect = async () => {
+    setBusy(true);
+    const r = await vkSetup(token, confirm);
+    setBusy(false);
+    if (r) { setRec({ url: r.url, secret: "" }); setToken(""); setConfirm(""); navigator.clipboard?.writeText(r.url).catch(() => null); }
+  };
+  return (
+    <div data-ch="vk" className="mt-2 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+        <span className="font-mono2 grid size-3.5 place-items-center rounded-sm text-[8px] font-bold text-white" style={{ background: "#4C75A3" }}>VK</span> ВКонтакте
+        <span className="text-[10.5px] font-normal text-muted-foreground">сообщения сообщества</span>
+        <Status st={rec ? "ok" : vk.status} okText="приёмник работает" />
+        <RouteChip src="vk" />
+      </div>
+      {s.mode !== "cloud" ? (
+        <>
+          <p className={cn("mt-1", SOFT)}>
+            Сообщения в сообщество ВКонтакте принимает сервер — заявки приходят даже при закрытом браузере.
+            Нужно общее пространство: <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в аккаунт</button>.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Button className="h-8 text-[12px]" onClick={() => setAuthStage("auth")}>Войти в аккаунт</Button>
+            <Go href={WHERE.vk.url} dim>{WHERE.vk.go}</Go>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mt-2"><Go href={WHERE.vk.url} dim={!!rec}>{WHERE.vk.go}</Go></div>
+          {!rec ? (
+            <Steps items={[
+              <>Кнопка выше → ваше сообщество → <b>Управление → Настройки → Работа с API</b>. На вкладке «Ключи доступа» создайте ключ с правом <b>«Сообщения сообщества»</b> — это токен.</>,
+              <>На вкладке <b>Callback API</b> в поле «Строка, которую должен вернуть сервер» скопируйте значение — вставьте его во второе поле ниже.</>,
+              <>Нажмите «Создать приёмник»: адрес скопируется сам. Вставьте его там же в «Адрес» → «Подтвердить». В «Типах событий» включите <b>Входящее сообщение</b>.</>,
+            ]} />
+          ) : (
+            <p className={cn("mt-1", SOFT)}>Клиенты пишут сообществу — диалог падает во «Входящие», ответы уходят от имени сообщества через сервер.</p>
+          )}
+          {vk.error && <p className="mt-1 text-[11.5px] text-destructive">{vk.error}</p>}
+          {owner && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+              <Input className="h-9 text-[12.5px]" type="password" placeholder={rec ? "новый токен сообщества (если меняли)" : "токен сообщества (ключ доступа)"} value={token} onChange={e => setToken(e.target.value)} data-vk-token />
+              <Input className="h-9 text-[12.5px]" placeholder="строка подтверждения из Callback API" value={confirm} onChange={e => setConfirm(e.target.value)} data-vk-confirm />
+              <Button className="h-9" disabled={busy || !confirm.trim() || (!rec && !token.trim())} onClick={() => void connect()}>{rec ? "Обновить" : "Создать приёмник"}</Button>
+            </div>
+          )}
+          {rec && (
+            <>
+              <code className="font-mono2 mt-2 block break-all rounded-md bg-muted px-2.5 py-2 text-[11px]">{rec.url}</code>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button variant="outline" className="h-8 gap-1.5 text-[12px]" onClick={() => navigator.clipboard?.writeText(rec.url).then(() => toast.success("Адрес скопирован", { description: "Вставьте в Callback API сообщества → Подтвердить" }))}>
+                  <Copy className="size-3.5" /> Скопировать адрес
+                </Button>
+                <LastLead src="vk" />
+                {owner && (
+                  <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+                    if (!window.confirm("Выключить приёмник ВКонтакте? Адрес перестанет принимать сообщения.")) return;
+                    if (await vkDisable()) setRec(null);
+                  }}>Отключить</Button>
+                )}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                Проверка: напишите сообществу с личной страницы — диалог появится во «Входящих» за пару секунд. Если ВКонтакте пишет «сервер не отвечает» —
+                сверьте строку подтверждения и нажмите «Обновить».
+              </p>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Авито: Messenger API. Сервер сам берёт токен по client_id/client_secret приложения,
+// узнаёт id аккаунта и подписывает вебхук на наш приёмник; секрет приложения в браузере не хранится.
+function AvitoCard() {
+  const s = useApp();
+  const av = s.integrations.avito;
+  const [cid, setCid] = useState("");
+  const [csec, setCsec] = useState("");
+  const [busy, setBusy] = useState(false);
+  const owner = s.users.find(u => u.id === s.currentUserId)?.role === "Владелец";
+  useEffect(() => {
+    if (s.mode !== "cloud" || !s.wsId) return;
+    void avitoReceiver();
+  }, [s.mode, s.wsId]);
+  const on = av.status === "ok";
+  return (
+    <div data-ch="avito" className="mt-2 rounded-md border p-3">
+      <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+        <span className="grid size-3.5 place-items-center rounded-full text-[8px] font-bold text-white" style={{ background: "#0AA1DD" }}>A</span> Авито
+        <span className="text-[10.5px] font-normal text-muted-foreground">сообщения по объявлениям</span>
+        <Status st={av.status} okText={av.userId ? `аккаунт ${av.userId}` : "подключено"} />
+        <RouteChip src="avito" />
+      </div>
+      {s.mode !== "cloud" ? (
+        <>
+          <p className={cn("mt-1", SOFT)}>
+            Сообщения покупателей с Авито принимает сервер — заявки приходят даже при закрытом браузере.
+            Нужно общее пространство: <button className={aCls} onClick={() => setAuthStage("auth")}>войдите в аккаунт</button>.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Button className="h-8 text-[12px]" onClick={() => setAuthStage("auth")}>Войти в аккаунт</Button>
+            <Go href={WHERE.avito.url} dim>{WHERE.avito.go}</Go>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Go href={WHERE.avito.url} dim={on}>{WHERE.avito.go}</Go>
+            <Go href="https://developers.avito.ru/api-catalog/messenger/documentation" dim>Документация Messenger API</Go>
+          </div>
+          {!on ? (
+            <Steps items={[
+              <>Кнопка выше → войдите под аккаунтом, на который приходят сообщения → <b>«Создать приложение»</b> (доступ к API Авито бесплатный для своего аккаунта).</>,
+              <>Скопируйте <b>client_id</b> и <b>client_secret</b> приложения в поля ниже.</>,
+              <>Нажмите «Подключить»: сервер сам зарегистрирует вебхук — новые сообщения покупателей будут падать во «Входящие», ответы уйдут через сервер.</>,
+            ]} />
+          ) : (
+            <p className={cn("mt-1", SOFT)}>Покупатели пишут по объявлениям — диалог падает во «Входящие», ответы уходят от вашего аккаунта через сервер. Свои же исходящие в заявки не превращаются.</p>
+          )}
+          {av.error && <p className="mt-1 text-[11.5px] text-destructive">{av.error}</p>}
+          {owner && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+              <Input className="h-9 text-[12.5px]" placeholder="client_id" value={cid} onChange={e => setCid(e.target.value)} data-avito-id />
+              <Input className="h-9 text-[12.5px]" type="password" placeholder="client_secret" value={csec} onChange={e => setCsec(e.target.value)} data-avito-secret />
+              <Button className="h-9" disabled={busy || !cid.trim() || !csec.trim() || av.status === "connecting"}
+                onClick={async () => { setBusy(true); if (await avitoSetup(cid, csec)) { setCid(""); setCsec(""); } setBusy(false); }}>
+                {on ? "Переподключить" : "Подключить"}
+              </Button>
+            </div>
+          )}
+          {on && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <LastLead src="avito" />
+              {owner && (
+                <Button variant="outline" className="h-8 text-[12px]" onClick={async () => {
+                  if (!window.confirm("Отключить Авито? Сообщения перестанут приходить в CRM.")) return;
+                  await avitoDisable();
+                }}>Отключить</Button>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -544,9 +741,9 @@ export function IntegrationsLive() {
       </div>
       <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
         Подключите канал по шагам — новые сообщения сами станут заявками. В каждой карточке есть кнопка,
-        которая открывает нужную страницу сервиса, «Проверить связь» (работает или нет — и почему) и метка «→ куда падают заявки». Токены хранятся в этом браузере;
-        при «Приёме на сервере» токен бота уезжает в общую базу пространства — его увидят участники, зато заявки
-        приходят даже при закрытом браузере.
+        которая открывает нужную страницу сервиса, «Проверить связь» (работает или нет — и почему) и метка «→ куда падают заявки». Токены Telegram, WhatsApp и MAX хранятся в этом браузере;
+        при «Приёме на сервере» токен уезжает в базу пространства — зато заявки приходят даже при закрытом браузере.
+        Instagram, ВКонтакте и Авито работают только через сервер: их ключи в браузер не попадают вовсе.
       </p>
 
       <SetupList />
@@ -651,6 +848,8 @@ export function IntegrationsLive() {
       </div>
 
       <IgCard />
+      <VkCard />
+      <AvitoCard />
 
       <NotifyCard />
 
@@ -758,15 +957,28 @@ function BackupCard() {
   const s = useApp();
   const st = storageState();
   const pct = Math.min(100, Math.round((st.bytes / 4_300_000) * 100));
+  const cloud = s.mode === "cloud";
   const dump = () => {
     // Ключи каналов, токен бота и сессия личного Telegram в файл НЕ попадают: копию базы
     // пересылают и кладут в облака, а это доступ к переписке с клиентами.
-    let text = window.localStorage.getItem("xxlcrm-site-v1") ?? "{}";
-    try {
-      const d = JSON.parse(text) as Record<string, unknown>;
-      delete d.integrations;
-      text = JSON.stringify(d);
-    } catch { /* не разобрали — отдаём как есть */ }
+    let text: string;
+    if (cloud) {
+      // В облаке база живёт на сервере — копия собирается из текущего состояния в том же формате,
+      // что и локальная: её можно загрузить на устройство «Загрузить копию» или просто хранить.
+      const st = getState();
+      text = JSON.stringify({
+        v: 3, entities: st.entities, automations: st.automations, routes: st.routes, records: st.records, tasks: st.tasks,
+        activities: st.activities, chats: st.chats.filter(c => !isPrivateChat(c)), replyTemplates: st.replyTemplates,
+        users: st.users, wsName: st.wsName, exportedAt: Date.now(),
+      });
+    } else {
+      text = window.localStorage.getItem("xxlcrm-site-v1") ?? "{}";
+      try {
+        const d = JSON.parse(text) as Record<string, unknown>;
+        delete d.integrations;
+        text = JSON.stringify(d);
+      } catch { /* не разобрали — отдаём как есть */ }
+    }
     const blob = new Blob([text], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -792,9 +1004,27 @@ function BackupCard() {
     };
     inp.click();
   };
-  if (s.mode === "cloud") return null;
+  if (cloud) {
+    const n = s.records.length + s.tasks.length;
+    return (
+      <div data-backup className="mt-2 rounded-md border p-3">
+        <div className="text-[12.5px] font-semibold">Копия облака</div>
+        <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
+          База хранится на сервере и не зависит от этого браузера. Но своя копия — это ваша страховка и ваша свобода:
+          файл открывается на любом устройстве в режиме «только это устройство» («Загрузить копию»), а значит, данные всегда можно забрать с собой.
+        </p>
+        <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+          В файле — записи, задачи, переписка и настройки конструктора: {n ? `${s.records.length} ${plural(s.records.length, "запись", "записи", "записей")} и ${s.tasks.length} ${plural(s.tasks.length, "задача", "задачи", "задач")}` : "пока пусто"}.
+          Личный Telegram и ключи каналов в копию не кладу.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button className="h-9 gap-1.5" onClick={dump}>Скачать копию</Button>
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="mt-2 rounded-md border p-3">
+    <div data-backup className="mt-2 rounded-md border p-3">
       <div className="text-[12.5px] font-semibold">Копия базы</div>
       <p className="mt-1 text-[11.5px] leading-snug text-muted-foreground">
         Пока вы работаете «только на этом устройстве», вся база лежит в браузере. Скачайте копию перед чисткой кэша,

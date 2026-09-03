@@ -23,9 +23,11 @@ function srcOn(s: ReturnType<typeof useApp>, src: InboundSource): boolean {
   if (src === "wa") return i.wa.status === "ok";
   if (src === "max") return i.max.status === "ok";
   if (src === "tilda") return i.tilda.status === "ok";
+  if (src === "vk") return i.vk.status === "ok";
+  if (src === "avito") return i.avito.status === "ok";
   return i.ig.status === "ok";
 }
-const srcShort = (s: InboundSource) => (s === "tg" ? "TG" : s === "wa" ? "WA" : s === "max" ? "MAX" : s === "ig" ? "IG" : "Сайт");
+const srcShort = (s: InboundSource) => (s === "tg" ? "TG" : s === "wa" ? "WA" : s === "max" ? "MAX" : s === "ig" ? "IG" : s === "vk" ? "VK" : s === "avito" ? "Авито" : "Сайт");
 
 // Что сломается, если тронуть раздел: маршруты приёма и правила автоматизаций смотрят сюда по id.
 // Заодно СРАЗУ отвечаем «куда приходят заявки»: в какую стадию падают новые — и где это меняется.

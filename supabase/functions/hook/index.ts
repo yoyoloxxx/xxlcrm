@@ -13,7 +13,8 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
-const VERSION = "0.23"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const VERSION = "0.24"; // клиент спрашивает версию перед включением канала — чтобы не слать вебхуки в старую функцию
+const SOURCES = ["tg", "wa", "max", "tilda", "ig", "vk", "avito"]; // источники, которые принимает приёмник
 type Any = Record<string, any>;
 // CORS открыт: форму с заявкой можно повесить на любой сайт и слать fetch-ом прямо в приёмник
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "POST, OPTIONS" };
@@ -535,8 +536,11 @@ Deno.serve(async (req: Request) => {
     try { return json(await digest()); } catch (e) { return json({ ok: false, error: String((e as Error).message ?? e).slice(0, 200) }, 500); }
   }
   // проба: «какая версия функции стоит и какие источники понимает»
-  if (!ws) return json({ ok: true, version: VERSION, sources: ["tg", "wa", "max", "tilda", "ig", "vk", "avito"], send: ["ig", "vk", "avito"] });
+  if (!ws) return json({ ok: true, version: VERSION, sources: SOURCES, send: ["ig", "vk", "avito"] });
   const src = url.searchParams.get("src") ?? "tg";
+  // Только известные источники: в channel_hooks живут и служебные строки (notify, digest) —
+  // по ним нельзя дать слать «заявки» с src=digest&k=off, минуя лимиты формы
+  if (!SOURCES.includes(src)) return json({ ok: false, error: "unknown source" }, 400);
   // Действия от имени участника (ответ клиенту, подключение Авито): по JWT пользователя, без секретов в браузере
   const action = url.searchParams.get("action");
   if (action) {

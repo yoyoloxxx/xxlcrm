@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 const CH: Record<Chat["channel"], { label: string; c: string }> = {
   tg: { label: "TG", c: "#5C7A9E" }, wa: { label: "WA", c: "#6E8B4F" },
   max: { label: "MAX", c: "#8B6E86" }, ig: { label: "IG", c: "#A8547C" },
+  vk: { label: "VK", c: "#4C75A3" }, avito: { label: "AV", c: "#0AA1DD" },
 };
 
 export function InboxLive({ goSettings }: { goSettings: () => void }) {

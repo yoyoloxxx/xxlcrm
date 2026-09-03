@@ -2,7 +2,7 @@
 // Токены хранятся только в localStorage этого браузера. Все ошибки — мягкие: тост + статус, тик продолжается.
 import { getState, A, handleIncoming, tabState } from "./store";
 import { tguInit, tguSend } from "./tg-user-lazy";
-import { autoServerIntake } from "./inbound";
+import { autoServerIntake, serverSend, type ServerSendSrc } from "./inbound";
 import { toast } from "sonner";
 
 const ints = () => getState().integrations;
@@ -230,10 +230,10 @@ export const tildaHookUrl = () => (ints().tilda.hookId ? `https://webhook.site/$
 export async function sendChatMessage(chatId: string, text: string) {
   const chat = getState().chats.find(c => c.id === chatId);
   if (!chat) return;
-  // Instagram: Meta не даёт отвечать без своего серверного токена — честно говорим, а не рисуем
+  // Instagram без токена страницы: Meta не даёт отвечать — честно говорим, а не рисуем
   // «отправленный» пузырь, который никуда не ушёл
-  if (chat.channel === "ig" && chat.ext?.ig !== undefined) {
-    toast.error("В Instagram пока только приём", { description: "Ответьте из приложения Instagram — ответка появится здесь позже, вместе с отправкой через Meta" });
+  if (chat.channel === "ig" && chat.ext?.ig !== undefined && !ints().ig.canSend) {
+    toast.error("В Instagram пока только приём", { description: "Вставьте токен страницы Meta в карточке Instagram («Интеграции») — и ответы пойдут через сервер" });
     return;
   }
   const msgId = A.chatSend(chatId, text);
@@ -245,7 +245,17 @@ export async function sendChatMessage(chatId: string, text: string) {
   else if (chat.ext?.tg !== undefined) okSent = await tgSend(chat.ext.tg, text);
   else if (chat.ext?.wa !== undefined) okSent = await waSend(chat.ext.wa, text);
   else if (chat.ext?.max !== undefined) okSent = await maxSend(chat.ext.max, text);
+  else if (chat.ext?.ig !== undefined) okSent = await viaServer("ig", chat.ext.ig, text);
+  else if (chat.ext?.vk !== undefined) okSent = await viaServer("vk", String(chat.ext.vk), text);
+  else if (chat.ext?.avito !== undefined) okSent = await viaServer("avito", chat.ext.avito, text);
   if (okSent === false && msgId) A.chatMarkFailed(chatId, msgId);
+}
+
+// Instagram / ВКонтакте / Авито отвечают через сервер: токены живут в базе, не в браузере
+async function viaServer(src: ServerSendSrc, to: string, text: string): Promise<boolean> {
+  const r = await serverSend(src, to, text);
+  if (!r.ok) toast.error(`${src === "ig" ? "Instagram" : src === "vk" ? "ВКонтакте" : "Авито"} не доставил: ${r.error ?? ""}`);
+  return r.ok;
 }
 
 // ---------- движок ----------

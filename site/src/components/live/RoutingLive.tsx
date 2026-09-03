@@ -18,6 +18,8 @@ function connected(s: ReturnType<typeof useApp>, src: InboundSource): boolean {
   if (src === "wa") return i.wa.status === "ok";
   if (src === "max") return i.max.status === "ok";
   if (src === "tilda") return i.tilda.status === "ok";
+  if (src === "vk") return i.vk.status === "ok";
+  if (src === "avito") return i.avito.status === "ok";
   return i.ig.status === "ok"; // Instagram: создан серверный приёмник
 }
 

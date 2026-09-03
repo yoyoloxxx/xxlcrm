@@ -21,9 +21,10 @@ export type TaskKind = "call" | "meet" | "todo" | "msg";
 export interface Task { id: string; title: string; kind: TaskKind; recordId?: string; ownerId: string; due: number; done: boolean; doneAt?: number; demo?: boolean }
 export type ActKind = "created" | "stage" | "field" | "comment" | "task";
 export interface Activity { id: string; recordId: string; ts: number; kind: ActKind; text: string; userId?: string; editKey?: string }
-export interface User { id: string; name: string; role: string; hue: number }
+// scope: «all» — видит всё пространство, «own» — только записи/задачи/диалоги, где он ответственный (владелец всегда всё)
+export interface User { id: string; name: string; role: string; hue: number; scope?: "all" | "own" }
 
-export type Channel = "tg" | "wa" | "max" | "ig";
+export type Channel = "tg" | "wa" | "max" | "ig" | "vk" | "avito";
 export interface ChatMsg { id: string; ts: number; out: boolean; text: string; failed?: boolean }
 export interface Chat {
   id: string; name: string; phone?: string; channel: Channel; recordId?: string; unread: number; msgs: ChatMsg[]; demo?: boolean;
@@ -33,7 +34,7 @@ export interface Chat {
   shared?: boolean;
 }
 // tgu — ЛИЧНЫЙ Telegram-аккаунт (MTProto), tg — Telegram-бот, ig — Instagram (id собеседника из Meta)
-export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string; ig?: string }
+export interface ChatExt { tg?: number; wa?: string; max?: number; tgu?: string; ig?: string; vk?: number; avito?: string }
 export interface ReplyTemplate { id: string; name: string; text: string }
 
 export type IntStatus = "off" | "connecting" | "ok" | "error";
@@ -45,7 +46,10 @@ export interface Integrations {
   max: { token: string; status: IntStatus; botName?: string; marker?: number; error?: string; mode?: "poll" | "hook" };
   tilda: { hookId: string; status: IntStatus; seen: string[]; error?: string };
   // Instagram принимает СЕРВЕР (приёмник в облаке): в браузере токенов нет, статус = «приёмник создан»
-  ig: { status: IntStatus; error?: string };
+  ig: { status: IntStatus; error?: string; canSend?: boolean };
+  // ВКонтакте (сообщество, Callback API) и Авито (Messenger API) — тоже целиком на сервере
+  vk: { status: IntStatus; error?: string };
+  avito: { status: IntStatus; error?: string; userId?: string };
   autoLead: boolean;
 }
 export const defaultIntegrations = (): Integrations => ({
@@ -55,14 +59,16 @@ export const defaultIntegrations = (): Integrations => ({
   max: { token: "", status: "off" },
   tilda: { hookId: "", status: "off", seen: [] },
   ig: { status: "off" },
+  vk: { status: "off" },
+  avito: { status: "off" },
   autoLead: true,
 });
-export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : "Instagram");
+export const channelName = (ch: Channel) => (ch === "tg" ? "Telegram" : ch === "wa" ? "WhatsApp" : ch === "max" ? "MAX" : ch === "vk" ? "ВКонтакте" : ch === "avito" ? "Авито" : "Instagram");
 
 // ---------- маршруты приёма: «откуда пришло → куда упало» ----------
 // Отвечает на вопрос «куда падают заявки»: у каждого источника свой раздел, стадия и ответственный.
 export type InboundSource = Channel | "tilda";
-export const SOURCES: InboundSource[] = ["tg", "wa", "max", "ig", "tilda"];
+export const SOURCES: InboundSource[] = ["tg", "wa", "max", "ig", "vk", "avito", "tilda"];
 export const sourceName = (s: InboundSource) => (s === "tilda" ? "Сайт (форма Tilda)" : channelName(s));
 export const OWNER_ROUND = "auto"; // «по очереди» — тому, у кого меньше активных
 export interface Route {

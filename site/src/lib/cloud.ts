@@ -405,6 +405,21 @@ export async function rotateInvite(): Promise<string | null> {
   return code;
 }
 
+/** Права участника: «всё» или «только свои» (записи, задачи и диалоги, где он ответственный).
+    Проверяет база (RLS): чужое такому сотруднику не отдаётся даже через API. */
+export async function setMemberScope(userId: string, scope: "all" | "own"): Promise<boolean> {
+  const s = getState();
+  if (!s.wsId) return false;
+  const { error } = await supa.from("members").update({ scope }).eq("workspace_id", s.wsId).eq("user_id", userId);
+  if (error) {
+    toast.error("Не удалось изменить права", { description: /policy|denied|permission/i.test(error.message) ? "Это может только владелец" : error.message.slice(0, 90) });
+    return false;
+  }
+  applyRemote(st2 => { const u = st2.users.find(x => x.id === userId); if (u) u.scope = scope; });
+  toast.success(scope === "own" ? "Теперь видит только свои записи" : "Теперь видит всё пространство", { description: "Вступит в силу у него при следующем обновлении экрана" });
+  return true;
+}
+
 /** Убрать сотрудника из пространства. Его записи остаются — уходит только доступ. */
 export async function removeMember(userId: string): Promise<boolean> {
   const s = getState();
@@ -474,7 +489,7 @@ async function openWorkspace(id: string, meId: string): Promise<void> {
     chats: (chats.data ?? []).map(M.chats.fromRow),
     replyTemplates: (tpls.data ?? []).map(M.reply_templates.fromRow),
   };
-  const users: User[] = (mems.data ?? []).map((m: Row) => ({ id: String(m.user_id), name: String(m.name), role: m.role === "owner" ? "Владелец" : "Сотрудник", hue: Number(m.hue ?? 42) }));
+  const users: User[] = (mems.data ?? []).map((m: Row) => ({ id: String(m.user_id), name: String(m.name), role: m.role === "owner" ? "Владелец" : "Сотрудник", hue: Number(m.hue ?? 42), scope: m.scope === "own" ? "own" : "all" }));
 
   enterCloud(data, { wsId: id, wsName: String(wss.data?.name ?? "Пространство"), inviteCode: String(wss.data?.invite_code ?? ""), users, meId });
 
@@ -815,7 +830,7 @@ async function refreshMembers(): Promise<void> {
   const { data } = await supa.from("members").select("*").eq("workspace_id", wsId);
   if (!data) return;
   const before = getState().users.length;
-  const users: User[] = data.map((m: Row) => ({ id: String(m.user_id), name: String(m.name), role: m.role === "owner" ? "Владелец" : "Сотрудник", hue: Number(m.hue ?? 42) }));
+  const users: User[] = data.map((m: Row) => ({ id: String(m.user_id), name: String(m.name), role: m.role === "owner" ? "Владелец" : "Сотрудник", hue: Number(m.hue ?? 42), scope: m.scope === "own" ? "own" : "all" }));
   applyRemote(s => { s.users = users; });
   if (users.length > before) toast.success("В команде новый участник: " + users[users.length - 1].name);
 }

@@ -26,7 +26,7 @@ function SetupChecklist({ goSettings, onPresets, goEntity }: { goSettings: () =>
   const steps = [
     { id: "structure", label: "Настроить разделы под ваш бизнес", hint: "готовый шаблон ниши или свой раздел", done: !!setupMarks().structure, run: onPresets },
     { id: "channel", label: "Подключить канал", hint: "Telegram, WhatsApp, MAX или форма с сайта", done: i.tg.status === "ok" || i.tgUser.status === "ok" || i.wa.status === "ok" || i.max.status === "ok" || i.tilda.status === "ok", run: goSettings },
-    { id: "data", label: "Загрузить своих клиентов", hint: "CSV из Excel или другой CRM — кнопка «Загрузить» в разделе", done: !!setupMarks().imported, run: goEntity },
+    { id: "data", label: "Загрузить своих клиентов", hint: "Файл Excel или CSV из другой CRM — кнопка «Загрузить» в разделе", done: !!setupMarks().imported, run: goEntity },
     { id: "cloud", label: "Общее пространство", hint: "чтобы данные были на всех устройствах и у команды", done: s.mode === "cloud", run: () => setAuthStage("auth") },
   ];
   const left = steps.filter(x => !x.done).length;

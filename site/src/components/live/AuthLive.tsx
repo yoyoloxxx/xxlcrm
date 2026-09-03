@@ -1,7 +1,7 @@
 // Аккаунты: оверлей входа/регистрации, создание/вступление в пространство, живая «Команда» в настройках
 import { useEffect, useMemo, useState } from "react";
 import { useApp, setAuthStage, getState } from "@/lib/store";
-import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere, myWorkspaces, switchWs, deleteWs } from "@/lib/cloud";
+import { signIn, signUp, signOutCloud, createWs, joinWs, localWeight, iAmOwner, rotateInvite, removeMember, backupWeight, moveBackupHere, myWorkspaces, switchWs, deleteWs, setMemberScope } from "@/lib/cloud";
 import { plural } from "@/lib/model";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -179,12 +179,29 @@ export function TeamLive() {
               style={u.role === "Владелец" ? { background: "hsl(var(--brass) / 0.16)", borderColor: "hsl(var(--brass) / 0.5)", color: "var(--brass-ink)" } : undefined}>
               {u.role}
             </span>
+            {/* Права: владелец решает, видит ли сотрудник всё пространство или только свои записи.
+                Проверяет база — чужое такому сотруднику не отдаётся даже через API. */}
+            {u.role !== "Владелец" && (owner ? (
+              <select aria-label={`Права: ${u.name}`} value={u.scope === "own" ? "own" : "all"}
+                onChange={e => void setMemberScope(u.id, e.target.value as "all" | "own")}
+                className="h-7 rounded-md border bg-background px-1.5 text-[11px] text-muted-foreground outline-none focus:border-ring">
+                <option value="all">видит всё</option>
+                <option value="own">только свои</option>
+              </select>
+            ) : (
+              <span className="text-[10.5px] text-muted-foreground">{u.scope === "own" ? "только свои" : "видит всё"}</span>
+            ))}
             {owner && u.id !== s.currentUserId && (
               <RemoveMember id={u.id} name={u.name} />
             )}
           </div>
         ))}
       </div>
+      {owner && s.users.some(u => u.role !== "Владелец") && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          «Только свои» — сотрудник видит и правит записи, задачи и диалоги, где он ответственный, и ничьи входящие; распределяйте заявки в «Приёме заявок» («по очереди» или на конкретного человека).
+        </p>
+      )}
       {/* Код приглашения — это ключ ко всей базе. Показываем его только владельцу и даём
           перевыпустить: раньше он висел у всех на виду и не менялся никогда. */}
       {owner ? (

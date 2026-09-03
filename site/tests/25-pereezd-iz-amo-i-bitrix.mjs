@@ -51,7 +51,7 @@ await p.goto(URL); await p.waitForTimeout(1500); await p.keyboard.press("Escape"
 await openImport("Клиенты");
 const empty = await dlg().innerText();
 ok("A1 подсказка про amoCRM/Битрикс24 и порядок «сначала клиенты, потом сделки»", /amoCRM/.test(empty) && /Битрикс24/.test(empty) && /сначала Клиентов, потом Сделки/i.test(empty), empty.slice(0, 300));
-ok("A2 честно сказано, что XLSX пока не читается", /XLSX пока не читается/i.test(empty));
+ok("A2 сказано, что Excel (.xlsx) читается напрямую, а старый .xls — нет", /Excel \(\.xlsx\)/.test(empty) && /\.xls \(Excel 97/.test(empty), empty.slice(0, 300));
 
 // ---------- B: клиенты из Битрикса (cp1251, ФИО в трёх колонках) ----------
 // До первого изменения база в localStorage ещё не сохранена — считаем по загруженным записям, а не по разнице

@@ -20,7 +20,7 @@ await page.waitForTimeout(400);
 const before = await page.evaluate(() => JSON.parse(localStorage.getItem("xxlcrm-site-v1")).records.filter(r => r.entityId === "contacts").length);
 await page.getByRole("button", { name: "Загрузить" }).click();
 await page.waitForTimeout(400);
-ok("Диалог импорта открылся", await page.getByText(/Перетащите файл CSV/).isVisible());
+ok("Диалог импорта открылся", await page.getByText(/Перетащите файл Excel или CSV/).isVisible());
 await page.setInputFiles("input[type=file]", "/home/claude/clients.csv");
 await page.waitForTimeout(600);
 const mapText = await page.locator("[role=dialog]").innerText();

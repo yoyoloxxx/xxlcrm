@@ -100,7 +100,7 @@ const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromi
   ok("Все внешние ссылки открываются в новой вкладке",
     (await page.locator('a[target="_blank"][rel="noreferrer"]').count()) >= 5);
   ok("Есть список «Что нужно сделать, чтобы заявки приходили»", body.includes("Что нужно сделать, чтобы заявки приходили"));
-  ok("Список считает, сколько осталось", /осталось \d из 5/.test(body));
+  ok("Список считает, сколько осталось", /осталось \d из \d/.test(body));
   ok("Каждый канал в списке ведёт к своей карточке", (await page.locator("[data-ch]").count()) >= 6);
 
   // «вставить сюда» из списка прокручивает к карточке канала и подсвечивает её
@@ -136,7 +136,7 @@ const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromi
 {
   const hook = readFileSync("../supabase/functions/hook/index.ts", "utf8");
   ok("hook: версия поднята (0.21+)", /const VERSION = "0\.2[1-9]"/.test(hook));
-  ok("hook: источник ig объявлен", /sources: \["tg", "wa", "max", "tilda", "ig"\]/.test(hook));
+  ok("hook: источник ig объявлен", /SOURCES = \["tg", "wa", "max", "tilda", "ig"/.test(hook) && /sources: SOURCES/.test(hook));
   ok("hook: проверка Meta возвращает hub.challenge голым текстом", /hub\.challenge/.test(hook) && /new Response\(challenge/.test(hook));
   ok("hook: парсер Instagram пропускает эхо своих сообщений", /parseInstagram/.test(hook) && /is_echo/.test(hook));
   ok("hook: пересыльщик без id не плодит общий диалог", /extKey === undefined/.test(hook));

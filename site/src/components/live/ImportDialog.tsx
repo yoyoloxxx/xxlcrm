@@ -88,16 +88,24 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
 
   const reset = () => { setRows([]); setMapping([]); setFileName(""); setNotes([]); setStagePick({}); };
   const load = async (file: File) => {
-    if (/\.xlsx?$/i.test(file.name)) {
-      toast.error("Excel-файл (XLSX) пока не читается", {
+    if (/\.xls$/i.test(file.name)) {
+      toast.error("Старый формат Excel 97–2003 (.xls) не читается", {
         duration: 12000,
-        description: "Откройте его в Excel: «Файл → Сохранить как → CSV UTF-8» — и загрузите CSV. Кодировку и разделитель подберу сам.",
+        description: "Откройте файл в Excel: «Файл → Сохранить как → Книга Excel (.xlsx)» или CSV — и загрузите его.",
       });
       return;
     }
     try {
-      const text = decodeFile(await file.arrayBuffer());
-      const { rows: parsed, warnings } = parseCSVReport(text, guessDelimiter(text));
+      let parsed: string[][], warnings: string[] = [];
+      const buf = await file.arrayBuffer();
+      // XLSX читается прямо здесь, без библиотек (первый лист); дальше тот же путь, что и у CSV
+      if (/\.xlsx$/i.test(file.name) || /\.xlsm$/i.test(file.name) || (buf.byteLength > 4 && new Uint8Array(buf, 0, 2).join() === "80,75")) {
+        const { readXlsx } = await import("@/lib/xlsx");
+        parsed = await readXlsx(buf);
+      } else {
+        const text = decodeFile(buf);
+        ({ rows: parsed, warnings } = parseCSVReport(text, guessDelimiter(text)));
+      }
       if (!parsed.length) { toast.error("Файл пустой или не похож на таблицу"); return; }
       setRows(parsed);
       setFileName(file.name);
@@ -118,8 +126,8 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
       if (dedup.some((g, i) => g !== guessed[i])) notes.push("Несколько колонок метили в одно поле — лишние отключил, выберите вручную");
       setNotes(notes);
       setMapping(dedup);
-    } catch {
-      toast.error("Не смог прочитать файл", { description: "Сохраните из Excel как CSV и попробуйте снова" });
+    } catch (e) {
+      toast.error("Не смог прочитать файл", { description: String((e as Error).message ?? e).slice(0, 100) || "Сохраните из Excel как CSV и попробуйте снова" });
     }
   };
 
@@ -264,20 +272,19 @@ export function ImportDialog({ entity, open, onOpenChange }: { entity: EntityCfg
               onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void load(f); }}
               className="grid place-items-center rounded-lg border border-dashed px-6 py-10 text-center">
               <Table2 className="mb-2 size-6 text-muted-foreground" />
-              <div className="text-[13.5px] font-medium">Перетащите файл CSV сюда</div>
+              <div className="text-[13.5px] font-medium">Перетащите файл Excel или CSV сюда</div>
               <p className="mt-1 max-w-sm text-[11.5px] leading-snug text-muted-foreground">
-                Экспорт из Excel, Google Таблиц, amoCRM, Битрикс24 — подойдёт любой CSV.
-                Кириллицу из Excel (windows-1251) и точку с запятой распознаю сам.
+                Экспорт из Excel (.xlsx), Google Таблиц, amoCRM, Битрикс24 — подойдёт и CSV.
+                Кириллицу из Excel (windows-1251), точку с запятой и даты распознаю сам; из книги Excel берётся первый лист.
               </p>
               <Button className="mt-3 h-9" onClick={() => inputRef.current?.click()}>Выбрать файл</Button>
-              <input ref={inputRef} type="file" accept=".csv,text/csv,text/plain" className="hidden"
+              <input ref={inputRef} type="file" accept=".csv,.xlsx,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden"
                 onChange={e => { const f = e.target.files?.[0]; if (f) void load(f); e.target.value = ""; }} />
             </div>
             <div data-migrate-hint className="mt-3 rounded-md border px-3 py-2 text-[11.5px] leading-snug text-muted-foreground">
-              <span className="font-medium text-foreground">Переезжаете из amoCRM или Битрикс24?</span> Выгрузите CSV
-              (в Битриксе — «Экспорт в CSV», в amo — «Экспорт») и загрузите сначала Клиентов, потом Сделки —
-              связи, стадии, даты и ответственные подберутся сами. Честно: XLSX пока не читается — пересохраните
-              в Excel как CSV.
+              <span className="font-medium text-foreground">Переезжаете из amoCRM или Битрикс24?</span> Выгрузите таблицу
+              (в Битриксе — «Экспорт в CSV/Excel», в amo — «Экспорт») и загрузите сначала Клиентов, потом Сделки —
+              связи, стадии, даты и ответственные подберутся сами. Старый .xls (Excel 97–2003) пересохраните в .xlsx.
             </div>
           </div>
         ) : (

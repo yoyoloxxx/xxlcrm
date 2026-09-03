@@ -98,7 +98,9 @@ const persistence = {
       ints.max.status = ints.max.token ? "ok" : "off";
       ints.tilda.status = ints.tilda.hookId ? "ok" : "off";
       // Instagram-приёмник живёт на сервере: «ок» переживает перезагрузку, ошибки — нет
-      ints.ig = { status: ints.ig?.status === "ok" ? "ok" : "off" };
+      ints.ig = { status: ints.ig?.status === "ok" ? "ok" : "off", canSend: !!ints.ig?.canSend };
+      ints.vk = { status: ints.vk?.status === "ok" ? "ok" : "off" };
+      ints.avito = { status: ints.avito?.status === "ok" ? "ok" : "off", userId: ints.avito?.userId };
       // личный Telegram: сессия есть → подключимся в фоне при старте
       ints.tgUser.status = ints.tgUser.session ? "connecting" : "off";
       ints.tgUser.stage = undefined; ints.tgUser.error = undefined;
@@ -1790,7 +1792,7 @@ export function sourceOption(e: EntityCfg, source: InboundSource): { fieldId: st
 function chatExtMatch(a: ChatExt, b: ChatExt): boolean {
   return (b.tg !== undefined && a.tg === b.tg) || (b.wa !== undefined && a.wa === b.wa)
     || (b.max !== undefined && a.max === b.max) || (b.tgu !== undefined && a.tgu === b.tgu)
-    || (b.ig !== undefined && a.ig === b.ig);
+    || (b.ig !== undefined && a.ig === b.ig) || (b.vk !== undefined && a.vk === b.vk) || (b.avito !== undefined && a.avito === b.avito);
 }
 
 // общий приём входящего из ЛЮБОГО реального канала: найти диалог по внешнему id либо создать (+автолид)
